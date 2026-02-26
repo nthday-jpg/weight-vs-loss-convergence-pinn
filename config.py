@@ -1,10 +1,10 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 @dataclass
 class Config:
     
     # Architecture
-    layers: list[int] = [2, 32, 1]
+    layers: list[int] = field(default_factory=lambda: [2, 32, 1])
     activation: str = 'tanh'
     final_activation: str | None = None
 
@@ -20,6 +20,6 @@ class Config:
         
     # Wandb configuration
     wandb_project: str = 'burgers-pinn'
-    wandb_run_name: str | None = None  # Auto-generate if None
-    wandb_tags: list | None = None
-    
+    wandb_run_name: str | None = None
+    wandb_tags: list | None = field(default_factory=lambda: None)
+
