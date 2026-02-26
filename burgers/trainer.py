@@ -11,7 +11,10 @@ class Trainer:
         self.model = BurgersPINN(config.layers)
         self.dataloader = get_dataloader(data_path, batch_size=config.batch_size)
         self.config = config
-        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)  
+        self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)
+        
+        # Store dataset for accessing ICs/BCs
+        self.dataset = self.dataloader.dataset  
 
     def train(self):
         accelerator = Accelerator(log_with="wandb")
@@ -19,6 +22,10 @@ class Trainer:
         is_main_process = accelerator.is_main_process
                 
         self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
+
+        # Load ICs/BCs once and move to device
+        ics = {k: v.to(device).requires_grad_(False) for k, v in self.dataset.ics.items()}
+        bcs = {k: v.to(device).requires_grad_(False) for k, v in self.dataset.bcs.items()}
 
         history = {
             'epoch': [],
@@ -51,11 +58,11 @@ class Trainer:
             total_samples = torch.tensor(0, device=device)
             
             for batch in self.dataloader:
-                batch_size = len(batch['interior']['t'])
+                batch_size = len(batch['t'])
                 
                 self.optimizer.zero_grad()
                 
-                loss_dict = accelerator.unwrap_model(self.model).compute_loss(batch)
+                loss_dict = accelerator.unwrap_model(self.model).compute_loss(batch, ics, bcs)
                 
                 total_loss_epoch += loss_dict['total_loss'].detach() * batch_size
                 ics_loss_epoch += loss_dict['ics_loss'].detach() * batch_size

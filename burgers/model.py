@@ -70,13 +70,9 @@ class BurgersPINN(nn.Module):
         residual = u_t + u * u_x - self.nu * u_xx
         return residual
     
-    def compute_loss(self, batch):
-        interior = batch['interior']
-        ics = batch['ics']
-        bcs = batch['bcs']
-
-        t_int = interior['t'].requires_grad_(True)
-        x_int = interior['x'].requires_grad_(True)
+    def compute_loss(self, batch, ics, bcs):
+        t_int = batch['t'].requires_grad_(True)
+        x_int = batch['x'].requires_grad_(True)
 
         u_pred = self.u_net(t_int, x_int)
         residual = self.r_net(u_pred, t_int, x_int)

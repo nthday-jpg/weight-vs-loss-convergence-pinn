@@ -45,19 +45,15 @@ class BurgersDataset(Dataset):
         x_idx = idx % self.Nx
 
         return {
-            "interior": {
-                "t": self.t_interior[t_idx],
-                "x": self.x_interior[x_idx],
-            },
-            "ics": self.ics,
-            "bcs": self.bcs
+            "t": self.t_interior[t_idx],
+            "x": self.x_interior[x_idx],
         }
 
 
 def get_dataloader(data_path='burgers/data/burgers.pt',
                    batch_size=64, num_workers=4, pin_memory=True,
                    shuffle=True):
-        
+
         dataset = BurgersDataset(data_path)
 
         dataloader = DataLoader(
