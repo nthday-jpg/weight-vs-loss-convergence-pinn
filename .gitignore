@@ -1,0 +1,28 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Data folders (except gen_data.py)
+**/data/*
+!**/data/gen_data.py
+!**/data/dataset.py
+
+# Results and outputs
+results/
+*.png
+*.pdf
+
+# Weights & Biases
+wandb/
+*.wandb
+
+# Jupyter notebooks
+.ipynb_checkpoints/
+*.ipynb
