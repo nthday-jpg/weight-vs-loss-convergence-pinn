@@ -55,9 +55,9 @@ class BurgersDataset(Dataset):
 
 
 def get_dataloader(data_path='burgers/data/burgers.pt',
-                   batch_size=64, num_workers=0, pin_memory=False,
+                   batch_size=64, num_workers=4, pin_memory=True,
                    shuffle=True):
-
+        
         dataset = BurgersDataset(data_path)
 
         dataloader = DataLoader(
