@@ -5,7 +5,7 @@ import torch
 import numpy as np
 from scipy.integrate import solve_ivp
 from pathlib import Path
-
+import argparse
 
 def solve_burgers_equation(nn=511, steps=200, nu=0.01/np.pi, t_final=1.0):
     """
@@ -103,19 +103,27 @@ def save_data(t, x, usol, nu, save_dir='burgers/data'):
 
 def main():
     """Main function to generate Burgers equation data."""
+    argparser = argparse.ArgumentParser(description="Generate data for Burgers' equation")
+    argparser.add_argument('--nn', type=int, default=511, help='Number of spatial points')
+    argparser.add_argument('--steps', type=int, default=200, help='Number of time steps for output')
+    argparser.add_argument('--nu', type=float, default=0.01/np.pi, help='Viscosity coefficient')
+    argparser.add_argument('--t_final', type=float, default=1.0, help='Final time for simulation')
+    argparser.add_argument('--save_dir', type=str, default='burgers/data', help='Directory to save generated data')
+    args = argparser.parse_args()
+
     start_time = time.time()
     
     # Parameters from MATLAB code
-    nn = 511
-    steps = 200
-    nu = 0.01 / np.pi
-    t_final = 1.0
+    nn = args.nn
+    steps = args.steps
+    nu = args.nu
+    t_final = args.t_final
     
     # Solve equation
     t, x, usol, nu = solve_burgers_equation(nn, steps, nu, t_final)
     
     # Save data
-    save_data(t, x, usol, nu)
+    save_data(t, x, usol, nu, save_dir=args.save_dir)
     
     elapsed_time = time.time() - start_time
     
