@@ -7,9 +7,9 @@ from model import BurgersPINN
 from data.dataset import get_dataloader
 
 class Trainer:
-    def __init__(self, config):
+    def __init__(self, config, data_path):
         self.model = BurgersPINN(config.layers)
-        self.dataloader = get_dataloader(config.data_path, batch_size=config.batch_size)
+        self.dataloader = get_dataloader(data_path, batch_size=config.batch_size)
         self.config = config
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)  
 
@@ -29,20 +29,20 @@ class Trainer:
         }
 
         accelerator.init_trackers(
-            project_name=self.config['wandb_project'],
+            project_name=self.config.wandb_project,
             config=asdict(self.config),
-            init_kwargs={"name": self.config['wandb_run_name'], "tags": self.config['wandb_tags']}
+            init_kwargs={"name": self.config.wandb_run_name, "tags": self.config.wandb_tags}
         )
         
         if is_main_process:
 
-            print(f"\nStarting training for {self.config['num_epochs']} epochs...")
+            print(f"\nStarting training for {self.config.num_epochs} epochs...")
             print(f"Device: {device}")
-            print(f"Learning rate: {self.config['learning_rate']}")
+            print(f"Learning rate: {self.config.learning_rate}")
             if accelerator is not None:
                 print(f"Using Accelerate with {accelerator.num_processes} process(es)")
         
-        pbar = tqdm(range(self.config['num_epochs']), desc='Training', disable=not is_main_process)
+        pbar = tqdm(range(self.config.num_epochs), desc='Training', disable=not is_main_process)
         for epoch in pbar:
             self.model.train()
 
@@ -69,7 +69,7 @@ class Trainer:
                 accelerator.backward(loss_dict['total_loss'])
                 self.optimizer.step()
 
-            if epoch % self.config['log_interval'] == 0:
+            if epoch % self.config.log_interval == 0:
                 # Reduce across processes
                 total_loss_epoch = accelerator.reduce(total_loss_epoch, reduction="sum").item()
                 ics_loss_epoch = accelerator.reduce(ics_loss_epoch, reduction="sum").item()
