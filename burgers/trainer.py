@@ -40,7 +40,7 @@ class Trainer:
             print(f"Learning rate: {self.config.learning_rate}")
             print(f"Using Accelerate with {accelerator.num_processes} process(es)")
         
-        pbar = tqdm(range(self.config.num_epochs), desc='Training', disable=not is_main_process)
+        pbar = tqdm(range(self.config.num_epochs), desc='Training', disable=not is_main_process, ncols=120)
         for epoch in pbar:
             self.model.train()
 
@@ -86,10 +86,10 @@ class Trainer:
                     history['res_loss'].append(res_loss_avg)
                     
                     pbar.set_postfix({
-                        'total_loss': total_loss_avg,
-                        'ics_loss': ics_loss_avg,
-                        'bcs_loss': bcs_loss_avg,
-                        'res_loss': res_loss_avg
+                        'total': f'{total_loss_avg:.3e}',
+                        'ics': f'{ics_loss_avg:.3e}',
+                        'bcs': f'{bcs_loss_avg:.3e}',
+                        'res': f'{res_loss_avg:.3e}'
                     })
                     accelerator.log({
                         'total_loss': total_loss_avg,
