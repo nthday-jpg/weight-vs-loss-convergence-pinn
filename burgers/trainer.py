@@ -19,7 +19,7 @@ class Trainer:
         is_main_process = accelerator.is_main_process
                 
         self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
-        
+
         history = {
             'epoch': [],
             'total_loss': [],
@@ -35,12 +35,10 @@ class Trainer:
         )
         
         if is_main_process:
-
             print(f"\nStarting training for {self.config.num_epochs} epochs...")
             print(f"Device: {device}")
             print(f"Learning rate: {self.config.learning_rate}")
-            if accelerator is not None:
-                print(f"Using Accelerate with {accelerator.num_processes} process(es)")
+            print(f"Using Accelerate with {accelerator.num_processes} process(es)")
         
         pbar = tqdm(range(self.config.num_epochs), desc='Training', disable=not is_main_process)
         for epoch in pbar:
@@ -53,13 +51,12 @@ class Trainer:
             total_samples = torch.tensor(0, device=device)
             
             for batch in self.dataloader:
-                # Get batch size (may be smaller for last batch)
                 batch_size = len(batch['interior']['t'])
                 
                 self.optimizer.zero_grad()
-                loss_dict = self.model.compute_loss(batch)
                 
-                # Accumulate weighted sum
+                loss_dict = accelerator.unwrap_model(self.model).compute_loss(batch)
+                
                 total_loss_epoch += loss_dict['total_loss'].detach() * batch_size
                 ics_loss_epoch += loss_dict['ics_loss'].detach() * batch_size
                 bcs_loss_epoch += loss_dict['bcs_loss'].detach() * batch_size
@@ -70,14 +67,12 @@ class Trainer:
                 self.optimizer.step()
 
             if epoch % self.config.log_interval == 0:
-                # Reduce across processes
                 total_loss_epoch = accelerator.reduce(total_loss_epoch, reduction="sum").item()
                 ics_loss_epoch = accelerator.reduce(ics_loss_epoch, reduction="sum").item()
                 bcs_loss_epoch = accelerator.reduce(bcs_loss_epoch, reduction="sum").item()
                 res_loss_epoch = accelerator.reduce(res_loss_epoch, reduction="sum").item()
                 total_samples = accelerator.reduce(total_samples, reduction="sum").item()
                 
-                # Calculate average
                 total_loss_avg = total_loss_epoch / total_samples
                 ics_loss_avg = ics_loss_epoch / total_samples
                 bcs_loss_avg = bcs_loss_epoch / total_samples
