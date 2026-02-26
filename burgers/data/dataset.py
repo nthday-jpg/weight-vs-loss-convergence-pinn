@@ -61,7 +61,8 @@ def get_dataloader(data_path='burgers/data/burgers.pt',
             batch_size=batch_size,
             shuffle=shuffle,
             num_workers=num_workers,
-            pin_memory=pin_memory
+            pin_memory=pin_memory,
+            persistent_workers=True if num_workers > 0 else False
         )
 
         return dataloader
