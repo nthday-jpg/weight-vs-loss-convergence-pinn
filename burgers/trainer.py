@@ -5,7 +5,7 @@ from tqdm import tqdm
 from accelerate import Accelerator
 from model import BurgersPINN
 from utils import load_burgers_data
-from balancer.simple import Balancer
+from balancer.inv import Balancer
 
 class Trainer:
     def __init__(self, config, data_path):
