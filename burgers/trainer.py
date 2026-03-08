@@ -1,3 +1,4 @@
+from matplotlib.pyplot import step
 from networkx import config
 import torch
 from dataclasses import asdict
@@ -10,8 +11,8 @@ class Trainer:
     def __init__(self, config, data_path):
         self.config = config
         self.num_epochs = config.num_epochs
-        self.batch_size = config.batch_size
         self.step_per_epoch = config.step_per_epoch
+        self.batch_size = config.batch_size
 
         self.model = BurgersPINN(config.layers)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)
@@ -69,7 +70,7 @@ class Trainer:
         self.bcs = {k: v.to(device).requires_grad_(False) for k, v in self.bcs.items()}
 
         history = {
-            'epoch': [],
+            'step': [],
             'total_loss': [],
             'ics_loss': [],
             'bcs_loss': [],
@@ -112,21 +113,25 @@ class Trainer:
                 
                 accelerator.backward(total_loss)
                 self.optimizer.step()
+            
+            # Gather and average losses across all processes for logging and scheduler step
+            total_loss_epoch = accelerator.reduce(total_loss_epoch, reduction="sum").item()
+            total_samples = accelerator.reduce(total_samples, reduction="sum").item()
+            total_loss_avg = total_loss_epoch / total_samples
+
+            self.scheduler.step(total_loss_avg)
 
             if epoch % self.config.log_interval == 0:
-                total_loss_epoch = accelerator.reduce(total_loss_epoch, reduction="sum").item()
                 ics_loss_epoch = accelerator.reduce(ics_loss_epoch, reduction="sum").item()
                 bcs_loss_epoch = accelerator.reduce(bcs_loss_epoch, reduction="sum").item()
                 res_loss_epoch = accelerator.reduce(res_loss_epoch, reduction="sum").item()
-                total_samples = accelerator.reduce(total_samples, reduction="sum").item()
                 
-                total_loss_avg = total_loss_epoch / total_samples
                 ics_loss_avg = ics_loss_epoch / total_samples
                 bcs_loss_avg = bcs_loss_epoch / total_samples
                 res_loss_avg = res_loss_epoch / total_samples
                 
                 if is_main_process:
-                    history['epoch'].append(epoch)
+                    history['step'].append(step)
                     history['total_loss'].append(total_loss_avg)
                     history['ics_loss'].append(ics_loss_avg)
                     history['bcs_loss'].append(bcs_loss_avg)
@@ -147,7 +152,6 @@ class Trainer:
                         'bcs_weight': self.balancer.weights['bcs'],
                         'res_weight': self.balancer.weights['res'],
                     })
-            self.scheduler.step(total_loss_avg)
 
         accelerator.end_training()
         return history
