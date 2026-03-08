@@ -143,6 +143,9 @@ class Trainer:
                         'ics_loss': ics_loss_avg,
                         'bcs_loss': bcs_loss_avg,
                         'res_loss': res_loss_avg,
+                        'ics_weight': self.balancer.weights['ics'],
+                        'bcs_weight': self.balancer.weights['bcs'],
+                        'res_weight': self.balancer.weights['res'],
                     })
             self.scheduler.step(total_loss_avg)
 
