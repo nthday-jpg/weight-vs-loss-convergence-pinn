@@ -16,7 +16,7 @@ class Trainer:
         self.model = BurgersPINN(config.layers)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)
         
-        self.dataset = load_burgers_data(data_path)
+        self.dataset = load_burgers_data(data_path, is_torch=True)
 
         self.t_end = self.dataset['t'][-1].item()
         self.x_start = self.dataset['x'][0].item()
