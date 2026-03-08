@@ -5,6 +5,7 @@ from tqdm import tqdm
 from accelerate import Accelerator
 from model import BurgersPINN
 from utils import load_burgers_data
+from balancer.simple import Balancer
 
 class Trainer:
     def __init__(self, config, data_path):
@@ -15,7 +16,7 @@ class Trainer:
 
         self.model = BurgersPINN(config.layers)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)
-        
+        self.balancer = Balancer()
         self.dataset = load_burgers_data(data_path, is_torch=True)
 
         self.t_end = self.dataset['t'][-1].item()
@@ -92,13 +93,14 @@ class Trainer:
                 
                 loss_dict = accelerator.unwrap_model(self.model).compute_loss(batch, self.ics, self.bcs)
                 
-                total_loss_epoch += loss_dict['total_loss'].detach() * self.batch_size
+                total_loss = self.balancer(loss_dict)
+                total_loss_epoch += total_loss.detach() * self.batch_size   
                 ics_loss_epoch += loss_dict['ics_loss'].detach() * self.batch_size
                 bcs_loss_epoch += loss_dict['bcs_loss'].detach() * self.batch_size
                 res_loss_epoch += loss_dict['res_loss'].detach() * self.batch_size
                 total_samples += self.batch_size
                 
-                accelerator.backward(loss_dict['total_loss'])
+                accelerator.backward(total_loss)
                 self.optimizer.step()
 
             if epoch % self.config.log_interval == 0:
@@ -131,7 +133,6 @@ class Trainer:
                         'ics_loss': ics_loss_avg,
                         'bcs_loss': bcs_loss_avg,
                         'res_loss': res_loss_avg,
-                        'epoch': epoch
                     })
         
         accelerator.end_training()

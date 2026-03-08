@@ -84,17 +84,10 @@ class BurgersPINN(nn.Module):
         u_bc_pred = self.u_net(bcs['t'], bcs['x'])
         loss_bcs = ((u_bc_pred - bcs['u']) ** 2).mean()
 
-        loss_total = (
-            self.weights['ics'] * loss_ics
-            + self.weights['bcs'] * loss_bcs
-            + self.weights['res'] * loss_res
-        )
-
         loss_dict = {
             'ics_loss': loss_ics,
             'bcs_loss': loss_bcs,
             'res_loss': loss_res,
-            'total_loss': loss_total
         }
 
         return loss_dict
