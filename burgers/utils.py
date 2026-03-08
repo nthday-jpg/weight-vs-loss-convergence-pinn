@@ -6,7 +6,12 @@ import matplotlib.pyplot as plt
 from pathlib import Path
 
 def load_burgers_data(data_path='burgers/data/burgers.npz', is_torch=False):
-    """Load data from .npz or .pt file.""" 
+    """Load data from .npz or .pt file.
+        t: shape (steps+1,)
+        x: shape (nx,)
+        usol: shape (steps+1, nx)
+        nu: shape (1,)
+    """ 
     if data_path.endswith('.pt'):
         data = torch.load(data_path)
     elif data_path.endswith('.npz'):
@@ -30,7 +35,12 @@ def load_burgers_data(data_path='burgers/data/burgers.npz', is_torch=False):
         usol = usol.numpy()
         nu = nu.item() if isinstance(nu, torch.Tensor) else nu
 
-    return t, x, usol, nu
+    return {
+        't': t,
+        'x': x,
+        'usol': usol,
+        'nu': nu
+    }
 
 def plot_comparison(t, x, u_true, u_pred, save_path='results/comparison.png'):
     """Plot comparison between true and predicted solutions."""

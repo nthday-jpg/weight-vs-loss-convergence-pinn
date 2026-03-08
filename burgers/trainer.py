@@ -4,28 +4,58 @@ from dataclasses import asdict
 from tqdm import tqdm
 from accelerate import Accelerator
 from model import BurgersPINN
-from data.dataset import get_dataloader
+from utils import load_burgers_data
 
 class Trainer:
     def __init__(self, config, data_path):
-        self.model = BurgersPINN(config.layers)
-        self.dataloader = get_dataloader(data_path, batch_size=config.batch_size)
         self.config = config
+        self.num_epochs = config.num_epochs
+        self.batch_size = config.batch_size
+        self.step_per_epoch = config.step_per_epoch
+
+        self.model = BurgersPINN(config.layers)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)
         
-        # Store dataset for accessing ICs/BCs
-        self.dataset = self.dataloader.dataset  
+        self.dataset = load_burgers_data(data_path)
+
+        self.t_end = self.dataset['t'][-1].item()
+        self.x_start = self.dataset['x'][0].item()
+        self.x_end = self.dataset['x'][-1].item()
+
+        # Initial conditions: u(0, x) for all x
+        nx = len(self.dataset['x'])
+        self.ics = {
+            't': torch.zeros(nx),  # t=0 for all x points
+            'x': self.dataset['x'].clone(),  # all x positions
+            'u': self.dataset['usol'][0, :].clone()  # initial condition
+        }
+        
+        # Boundary conditions: u(t, x=0) and u(t, x=L) for all t
+        nt = len(self.dataset['t'])
+        self.bcs = {
+            't': self.dataset['t'].repeat(2),  # repeat for both boundaries
+            'x': torch.cat([torch.full((nt,), self.dataset['x'][0]), 
+                           torch.full((nt,), self.dataset['x'][-1])]),  # x=0 and x=L
+            'u': torch.cat([self.dataset['usol'][:, 0], 
+                           self.dataset['usol'][:, -1]])  # boundary values
+        }
+
+    def sample_batches(self):
+        for _ in range(self.step_per_epoch):
+            t = torch.rand(self.batch_size) * self.t_end  # Random time in [0, t_end]
+            x = torch.rand(self.batch_size) * (self.x_end - self.x_start) + self.x_start
+            yield {'t': t, 'x': x}
 
     def train(self):
         accelerator = Accelerator(log_with="wandb")
         device = accelerator.device
         is_main_process = accelerator.is_main_process
                 
-        self.model, self.optimizer, self.dataloader = accelerator.prepare(self.model, self.optimizer, self.dataloader)
+        self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
 
-        # Load ICs/BCs once and move to device
-        ics = {k: v.to(device).requires_grad_(False) for k, v in self.dataset.ics.items()}
-        bcs = {k: v.to(device).requires_grad_(False) for k, v in self.dataset.bcs.items()}
+        # Move ICs/BCs to device once
+        self.ics = {k: v.to(device).requires_grad_(False) for k, v in self.ics.items()}
+        self.bcs = {k: v.to(device).requires_grad_(False) for k, v in self.bcs.items()}
 
         history = {
             'epoch': [],
@@ -57,18 +87,16 @@ class Trainer:
             res_loss_epoch = torch.tensor(0.0, device=device)
             total_samples = torch.tensor(0, device=device)
             
-            for batch in self.dataloader:
-                batch_size = len(batch['t'])
-                
+            for batch in self.sample_batches():                
                 self.optimizer.zero_grad()
                 
-                loss_dict = accelerator.unwrap_model(self.model).compute_loss(batch, ics, bcs)
+                loss_dict = accelerator.unwrap_model(self.model).compute_loss(batch, self.ics, self.bcs)
                 
-                total_loss_epoch += loss_dict['total_loss'].detach() * batch_size
-                ics_loss_epoch += loss_dict['ics_loss'].detach() * batch_size
-                bcs_loss_epoch += loss_dict['bcs_loss'].detach() * batch_size
-                res_loss_epoch += loss_dict['res_loss'].detach() * batch_size
-                total_samples += batch_size
+                total_loss_epoch += loss_dict['total_loss'].detach() * self.batch_size
+                ics_loss_epoch += loss_dict['ics_loss'].detach() * self.batch_size
+                bcs_loss_epoch += loss_dict['bcs_loss'].detach() * self.batch_size
+                res_loss_epoch += loss_dict['res_loss'].detach() * self.batch_size
+                total_samples += self.batch_size
                 
                 accelerator.backward(loss_dict['total_loss'])
                 self.optimizer.step()
