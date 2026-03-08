@@ -15,7 +15,8 @@ class Trainer:
 
         self.model = BurgersPINN(config.layers)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)
-        
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=50)
+
         if config.balancer_type == 'simple':
             from balancer.simple import Balancer
             self.balancer = Balancer()
@@ -61,7 +62,7 @@ class Trainer:
         device = accelerator.device
         is_main_process = accelerator.is_main_process
                 
-        self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
+        self.model, self.optimizer, self.scheduler = accelerator.prepare(self.model, self.optimizer, self.scheduler)
 
         # Move ICs/BCs to device once
         self.ics = {k: v.to(device).requires_grad_(False) for k, v in self.ics.items()}
@@ -111,6 +112,7 @@ class Trainer:
                 
                 accelerator.backward(total_loss)
                 self.optimizer.step()
+                self.scheduler.step(total_loss)
 
             if epoch % self.config.log_interval == 0:
                 total_loss_epoch = accelerator.reduce(total_loss_epoch, reduction="sum").item()
