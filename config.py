@@ -21,6 +21,7 @@ class Config:
 
     # Balancer
     balancer_type: str = 'simple'  # Options: 'simple', 'uniform', 'inv'
+    balancer_alpha: float = 0.1  # EMA coefficient for weight smoothing (0-1)
         
     # Wandb configuration
     wandb_project: str = 'burgers-pinn'

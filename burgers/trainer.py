@@ -19,13 +19,13 @@ class Trainer:
 
         if config.balancer_type == 'simple':
             from balancer.simple import Balancer
-            self.balancer = Balancer()
+            self.balancer = Balancer(alpha=config.balancer_alpha)
         elif config.balancer_type == 'uniform':
             from balancer.uniform import Balancer
             self.balancer = Balancer()
         elif config.balancer_type == 'inv':
             from balancer.inv import Balancer
-            self.balancer = Balancer()
+            self.balancer = Balancer(alpha=config.balancer_alpha)
 
         self.dataset = load_burgers_data(data_path, is_torch=True)
 
@@ -145,7 +145,7 @@ class Trainer:
                         'res_loss': res_loss_avg,
                     })
             self.scheduler.step(total_loss_avg)
-            
+
         accelerator.end_training()
         return history
 

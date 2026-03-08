@@ -1,5 +1,12 @@
 class Balancer():
-    def __init__(self):
+    def __init__(self, alpha=0.1):
+        """Simple balancer with EMA smoothing.
+        
+        Args:
+            alpha: EMA coefficient (0-1). Higher = more responsive to recent losses.
+                   0.1 means 10% new weight, 90% old weight.
+        """
+        self.alpha = alpha
         self.weights = {
             'ics': 1.0,
             'bcs': 1.0,
@@ -7,16 +14,22 @@ class Balancer():
         }
 
     def balance(self, loss_dict):
-        """Adjust weights to equalize loss contributions."""  
+        """Adjust weights to equalize loss contributions with EMA smoothing."""  
         # Detach and convert to scalars
         ics_val = loss_dict['ics_loss'].detach().item()
         bcs_val = loss_dict['bcs_loss'].detach().item()
         res_val = loss_dict['res_loss'].detach().item()
         
+        # Compute raw weights
         sum_losses = ics_val + bcs_val + res_val + 1e-8  
-        self.weights['ics'] = ics_val / sum_losses
-        self.weights['bcs'] = bcs_val / sum_losses
-        self.weights['res'] = res_val / sum_losses
+        weight_ics_raw = ics_val / sum_losses
+        weight_bcs_raw = bcs_val / sum_losses
+        weight_res_raw = res_val / sum_losses
+        
+        # Apply EMA smoothing
+        self.weights['ics'] = self.alpha * weight_ics_raw + (1 - self.alpha) * self.weights['ics']
+        self.weights['bcs'] = self.alpha * weight_bcs_raw + (1 - self.alpha) * self.weights['bcs']
+        self.weights['res'] = self.alpha * weight_res_raw + (1 - self.alpha) * self.weights['res']
     
     def __call__(self, loss_dict):
         self.balance(loss_dict)
