@@ -5,7 +5,6 @@ from tqdm import tqdm
 from accelerate import Accelerator
 from model import BurgersPINN
 from utils import load_burgers_data
-from balancer.inv import Balancer
 
 class Trainer:
     def __init__(self, config, data_path):
@@ -16,7 +15,17 @@ class Trainer:
 
         self.model = BurgersPINN(config.layers)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)
-        self.balancer = Balancer()
+        
+        if config.balancer_type == 'simple':
+            from balancer.simple import Balancer
+            self.balancer = Balancer()
+        elif config.balancer_type == 'uniform':
+            from balancer.uniform import Balancer
+            self.balancer = Balancer()
+        elif config.balancer_type == 'inv':
+            from balancer.inv import Balancer
+            self.balancer = Balancer()
+
         self.dataset = load_burgers_data(data_path, is_torch=True)
 
         self.t_end = self.dataset['t'][-1].item()

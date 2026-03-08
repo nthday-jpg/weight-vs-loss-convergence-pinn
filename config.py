@@ -18,6 +18,9 @@ class Config:
     # Logging and checkpointing
     log_interval: int = 1
     save_interval: int = 5000
+
+    # Balancer
+    balancer_type: str = 'simple'  # Options: 'simple', 'uniform', 'inv'
         
     # Wandb configuration
     wandb_project: str = 'burgers-pinn'
