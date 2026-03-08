@@ -20,7 +20,7 @@ class Balancer():
         bcs_val = loss_dict['bcs_loss'].detach().item()
         res_val = loss_dict['res_loss'].detach().item()
         
-        # Compute raw weights
+        # Compute raw weights (proportional to losses)
         sum_losses = ics_val + bcs_val + res_val + 1e-8  
         weight_ics_raw = ics_val / sum_losses
         weight_bcs_raw = bcs_val / sum_losses
@@ -30,6 +30,18 @@ class Balancer():
         self.weights['ics'] = self.alpha * weight_ics_raw + (1 - self.alpha) * self.weights['ics']
         self.weights['bcs'] = self.alpha * weight_bcs_raw + (1 - self.alpha) * self.weights['bcs']
         self.weights['res'] = self.alpha * weight_res_raw + (1 - self.alpha) * self.weights['res']
+        
+        # Clamp to minimum weight
+        min_weight = 0.15
+        self.weights['ics'] = max(self.weights['ics'], min_weight)
+        self.weights['bcs'] = max(self.weights['bcs'], min_weight)
+        self.weights['res'] = max(self.weights['res'], min_weight)
+        
+        # Renormalize to sum to 1
+        weight_sum = self.weights['ics'] + self.weights['bcs'] + self.weights['res']
+        self.weights['ics'] /= weight_sum
+        self.weights['bcs'] /= weight_sum
+        self.weights['res'] /= weight_sum
     
     def __call__(self, loss_dict):
         self.balance(loss_dict)
