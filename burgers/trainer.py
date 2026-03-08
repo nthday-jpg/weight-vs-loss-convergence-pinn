@@ -135,6 +135,7 @@ class Trainer:
                 ics_loss_avg = ics_loss_epoch / total_samples
                 bcs_loss_avg = bcs_loss_epoch / total_samples
                 res_loss_avg = res_loss_epoch / total_samples
+                unweighted_total = ics_loss_avg + bcs_loss_avg + res_loss_avg  # Add this line
                 
                 if is_main_process:
                     history['step'].append(step)
@@ -150,7 +151,8 @@ class Trainer:
                         'res': f'{res_loss_avg:.3e}'
                     })
                     accelerator.log({
-                        'total_loss': total_loss_avg,
+                        'total_loss': total_loss_avg,      
+                        'total_loss_unweighted': unweighted_total,  
                         'ics_loss': ics_loss_avg,
                         'bcs_loss': bcs_loss_avg,
                         'res_loss': res_loss_avg,
