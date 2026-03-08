@@ -13,7 +13,7 @@ class Config:
     step_per_epoch: int = 100
     learning_rate: float = 1e-3
     batch_size: int = 64
-    l2_reg: float = 0.0
+    l2_reg: float = 0.0    
     
     # Logging and checkpointing
     log_interval: int = 1

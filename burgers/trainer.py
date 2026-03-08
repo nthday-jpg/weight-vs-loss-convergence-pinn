@@ -15,7 +15,7 @@ class Trainer:
 
         self.model = BurgersPINN(config.layers)
         self.optimizer = torch.optim.Adam(self.model.parameters(), lr=config.learning_rate, weight_decay=config.l2_reg)
-        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=50)
+        self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(self.optimizer, mode='min', factor=0.1, patience=100)
 
         if config.balancer_type == 'simple':
             from balancer.simple import Balancer
@@ -112,7 +112,6 @@ class Trainer:
                 
                 accelerator.backward(total_loss)
                 self.optimizer.step()
-                self.scheduler.step(total_loss)
 
             if epoch % self.config.log_interval == 0:
                 total_loss_epoch = accelerator.reduce(total_loss_epoch, reduction="sum").item()
@@ -145,7 +144,8 @@ class Trainer:
                         'bcs_loss': bcs_loss_avg,
                         'res_loss': res_loss_avg,
                     })
-        
+            self.scheduler.step(total_loss_avg)
+            
         accelerator.end_training()
         return history
 
