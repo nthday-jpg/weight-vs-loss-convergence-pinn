@@ -8,9 +8,9 @@ class Balancer:
         """
         self.alpha = alpha
         self.weights = {
-            'ics': 1.0,
-            'bcs': 1.0,
-            'res': 1.0,
+            'ics': 1.0/3.0,
+            'bcs': 1.0/3.0,
+            'res': 1.0/3.0,
         }
     
     def balance(self, loss_dict):
