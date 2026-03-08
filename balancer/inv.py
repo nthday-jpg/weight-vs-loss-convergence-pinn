@@ -1,5 +1,5 @@
 class Balancer:
-    def __init__(self, alpha=1):
+    def __init__(self, alpha=0.1):
         """Inverse balancer with EMA smoothing.
         
         Args:
