@@ -40,10 +40,10 @@ class Trainer:
                            self.dataset['usol'][:, -1]])  # boundary values
         }
 
-    def sample_batches(self):
+    def sample_batches(self, device):
         for _ in range(self.step_per_epoch):
-            t = torch.rand(self.batch_size) * self.t_end  # Random time in [0, t_end]
-            x = torch.rand(self.batch_size) * (self.x_end - self.x_start) + self.x_start
+            t = torch.rand(self.batch_size, device=device) * self.t_end  # Random time in [0, t_end]
+            x = torch.rand(self.batch_size, device=device) * (self.x_end - self.x_start) + self.x_start
             yield {'t': t, 'x': x}
 
     def train(self):
@@ -87,7 +87,7 @@ class Trainer:
             res_loss_epoch = torch.tensor(0.0, device=device)
             total_samples = torch.tensor(0, device=device)
             
-            for batch in self.sample_batches():                
+            for batch in self.sample_batches(device):
                 self.optimizer.zero_grad()
                 
                 loss_dict = accelerator.unwrap_model(self.model).compute_loss(batch, self.ics, self.bcs)
