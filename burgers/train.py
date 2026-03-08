@@ -15,7 +15,9 @@ def main():
     with open(args.config_file, 'r') as f:
         config_dict = json.load(f)
 
+    print(f"Debug: Loaded config_dict = {config_dict}")
     config = Config(**config_dict)
+    print(f"Debug: Config.wandb_run_name = {config.wandb_run_name}")
     trainer = Trainer(config, args.data_file)
     trainer.train()
     

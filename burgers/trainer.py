@@ -77,10 +77,20 @@ class Trainer:
             'res_loss': [],
         }
 
+        init_kwargs = {}
+        if self.config.wandb_run_name is not None:
+            init_kwargs["name"] = self.config.wandb_run_name
+        if self.config.wandb_tags is not None:
+            init_kwargs["tags"] = self.config.wandb_tags
+        
+        if is_main_process:
+            print(f"Debug: wandb_run_name = {self.config.wandb_run_name}")
+            print(f"Debug: init_kwargs = {init_kwargs}")
+        
         accelerator.init_trackers(
             project_name=self.config.wandb_project,
             config=asdict(self.config),
-            init_kwargs={"name": self.config.wandb_run_name, "tags": self.config.wandb_tags}
+            init_kwargs=init_kwargs
         )
         
         if is_main_process:
