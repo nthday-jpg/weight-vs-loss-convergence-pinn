@@ -14,19 +14,24 @@ class Balancer:
         }
     
     def balance(self, loss_dict):
-        """Adjust weights inversely to losses with EMA smoothing."""
-        # Detach and convert to scalars
+        """Adjust weights inversely to losses with max-normalization."""
         ics_val = loss_dict['ics_loss'].detach().item()
         bcs_val = loss_dict['bcs_loss'].detach().item()
         res_val = loss_dict['res_loss'].detach().item()
         
-        # Compute raw inverse weights
-        inv_sum = 1.0 / (ics_val + 1e-8) + 1.0 / (bcs_val + 1e-8) + 1.0 / (res_val + 1e-8)
-        weight_ics_raw = (1.0 / (ics_val + 1e-8)) / inv_sum
-        weight_bcs_raw = (1.0 / (bcs_val + 1e-8)) / inv_sum
-        weight_res_raw = (1.0 / (res_val + 1e-8)) / inv_sum
+        # Normalize by max to keep values in [0, 1]
+        max_loss = max(ics_val, bcs_val, res_val) + 1e-8
         
-        # Apply EMA smoothing
+        # Inverse of normalized losses
+        inv_ics = 1.0 / (ics_val / max_loss + 1e-2)
+        inv_bcs = 1.0 / (bcs_val / max_loss + 1e-2)
+        inv_res = 1.0 / (res_val / max_loss + 1e-2)
+        
+        inv_sum = inv_ics + inv_bcs + inv_res
+        weight_ics_raw = inv_ics / inv_sum
+        weight_bcs_raw = inv_bcs / inv_sum
+        weight_res_raw = inv_res / inv_sum
+        
         self.weights['ics'] = self.alpha * weight_ics_raw + (1 - self.alpha) * self.weights['ics']
         self.weights['bcs'] = self.alpha * weight_bcs_raw + (1 - self.alpha) * self.weights['bcs']
         self.weights['res'] = self.alpha * weight_res_raw + (1 - self.alpha) * self.weights['res']
