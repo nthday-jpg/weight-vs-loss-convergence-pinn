@@ -1,6 +1,8 @@
+from .registry import register_balancer
 from .base import BaseBalancer
 import math
 
+@register_balancer('softadapt')
 class SoftAdaptBalancer(BaseBalancer):
     def __init__(self, beta=1.0):  # beta is temperature parameter
         super().__init__()

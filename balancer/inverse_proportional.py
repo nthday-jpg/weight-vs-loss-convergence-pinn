@@ -1,5 +1,7 @@
 from .base import BaseBalancer
+from .registry import register_balancer
 
+@register_balancer('inverse_proportional')
 class InverseProportionalBalancer(BaseBalancer):
     def __init__(self, alpha=0.1):
         """Inverse balancer with EMA smoothing.

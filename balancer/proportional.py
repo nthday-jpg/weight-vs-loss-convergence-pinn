@@ -1,4 +1,7 @@
 from .base import BaseBalancer
+from .registry import register_balancer
+
+@register_balancer('proportional')
 class ProportionalBalancer(BaseBalancer):
     def __init__(self, alpha=0.1):
         """Simple balancer with EMA smoothing.

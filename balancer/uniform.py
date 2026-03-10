@@ -1,4 +1,7 @@
 from .base import BaseBalancer
+from .registry import register_balancer
+
+@register_balancer('uniform')
 class UniformBalancer(BaseBalancer):
     def __init__(self):
         super().__init__()
