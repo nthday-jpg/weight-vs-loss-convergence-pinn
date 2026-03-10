@@ -20,8 +20,12 @@ class Config:
     save_interval: int = 5000
 
     # Balancer
-    balancer_type: str = 'simple'  # Options: 'simple', 'uniform', 'inv'
-    balancer_alpha: float = 0.1  # EMA coefficient for weight smoothing (0-1)
+    balancer_type: str = 'uniform'
+    
+    # Balancer-specific parameters (optional dicts)
+    proportional_params: dict = field(default_factory=lambda: {'alpha': 0.1})
+    inverse_proportional_params: dict = field(default_factory=lambda: {'alpha': 0.1})
+    softadapt_params: dict = field(default_factory=lambda: {'beta': 0.1, 'ema_alpha': 0.05})
         
     # Wandb configuration
     wandb_project: str = 'burgers-pinn'
