@@ -40,3 +40,4 @@ class SoftAdaptBalancer(BaseBalancer):
             + self.weights['bcs'] * loss_dict['bcs_loss']
             + self.weights['res'] * loss_dict['res_loss']
         )
+
