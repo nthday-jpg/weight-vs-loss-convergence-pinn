@@ -78,10 +78,13 @@ class Trainer:
         }
 
         init_kwargs = {}
+        wandb_init = {}
         if self.config.wandb_run_name is not None:
-            init_kwargs["name"] = self.config.wandb_run_name
+            wandb_init["name"] = self.config.wandb_run_name
         if self.config.wandb_tags is not None:
-            init_kwargs["tags"] = self.config.wandb_tags
+            wandb_init["tags"] = self.config.wandb_tags
+        if wandb_init:
+            init_kwargs["wandb"] = wandb_init
         
         accelerator.init_trackers(
             project_name=self.config.wandb_project,
@@ -161,7 +164,23 @@ class Trainer:
                         'res_weight': self.balancer.weights['res'],
                     })
 
+        self.model = accelerator.unwrap_model(self.model)
+        l2_error = self.evaluate()
+        if is_main_process:
+            print(f"\nFinal L2 error on training data: {l2_error:.3e}")
+            accelerator.log({'final_l2_error': l2_error})  
+        
         accelerator.end_training()
-        return history
+    
+    def evaluate(self):
+        self.model.eval()
+        device = next(self.model.parameters()).device
+        t = self.dataset['t'].to(device)
+        x = self.dataset['x'].to(device)
+        u = self.dataset['usol'].to(device)
+
+        u_pred = self.model.predict_solution(t, x)
+        l2_error = torch.mean((u - u_pred)**2)
+        return l2_error
 
 

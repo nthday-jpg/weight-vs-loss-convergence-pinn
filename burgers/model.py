@@ -33,11 +33,6 @@ class BurgersPINN(nn.Module):
         
         self.network = MLP(layers)
         self.nu = nu
-        self.weights = {
-            'ics': 1.0,
-            'bcs': 1.0,
-            'res': 1.0
-        }
 
     def u_net(self, t, x):
         """Forward pass through network."""
@@ -105,9 +100,3 @@ class BurgersPINN(nn.Module):
             u = u_flat.reshape(T.shape)
         
         return u
-    
-    def compute_l2_error(self, u_true, t, x):
-        """Compute L2 relative error."""
-        u_pred = self.predict_solution(t, x)
-        error = torch.norm(u_pred - u_true) / torch.norm(u_true)
-        return error.item()
