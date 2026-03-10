@@ -1,5 +1,7 @@
-class Balancer:
+from .base import BaseBalancer
+class UniformBalancer(BaseBalancer):
     def __init__(self):
+        super().__init__()
         self.weights = {
             'ics': 1.0/3.0,
             'bcs': 1.0/3.0,
