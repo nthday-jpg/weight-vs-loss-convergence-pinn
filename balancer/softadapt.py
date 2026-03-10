@@ -30,7 +30,8 @@ class SoftAdaptBalancer(BaseBalancer):
     def __call__(self, loss_dict):
         rates = self._compute_rate_of_change(loss_dict)
         
-        exp_rates = {k: math.exp(v * self.beta) for k, v in rates.items()}
+        max_rate = max(rates.values())
+        exp_rates = {k: math.exp((v-max_rate) * self.beta) for k, v in rates.items()}
         sum_exp = sum(exp_rates.values())
         
         self.weights = {k: v / sum_exp for k, v in exp_rates.items()}
