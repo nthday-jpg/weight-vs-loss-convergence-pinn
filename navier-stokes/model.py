@@ -28,7 +28,7 @@ class NavierStokesPINN(nn.Module):
                           torch.ones_like(rho), 
                           retain_graph=True) [0]
 
-        u_x = torch.autograd.grad(u, [t, x], 
+        u_x = torch.autograd.grad(u, x, 
                                 torch.ones_like(u), 
                                 create_graph=True,    
                                 retain_graph=True)[0]
