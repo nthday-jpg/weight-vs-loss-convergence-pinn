@@ -17,6 +17,7 @@ class Config:
     learning_rate: float = 1e-3
     batch_size: int = 64
     l2_reg: float = 0.0    
+    max_grad_norm: float | None = None
     
     # Logging and checkpointing
     log_interval: int = 1

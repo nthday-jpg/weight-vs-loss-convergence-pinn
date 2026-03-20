@@ -51,6 +51,14 @@ class Trainer:
             yield {'t': t, 'x': x}
 
     def train(self):
+        def _reduced_scalar(value):
+            reduced = accelerator.reduce(value, reduction="sum")
+            if isinstance(reduced, torch.Tensor):
+                return reduced.item()
+            if isinstance(reduced, (int, float)):
+                return float(reduced)
+            raise TypeError(f"Unexpected reduced value type: {type(reduced)}")
+
         accelerator = Accelerator(log_with="wandb")
         device = accelerator.device
         is_main_process = accelerator.is_main_process
@@ -113,19 +121,24 @@ class Trainer:
                 total_samples += self.batch_size
                 
                 accelerator.backward(total_loss)
+                if self.config.max_grad_norm is not None and self.config.max_grad_norm > 0:
+                    accelerator.clip_grad_norm_(
+                        self.model.parameters(),
+                        self.config.max_grad_norm,
+                    )
                 self.optimizer.step()
             
             # Gather and average losses across all processes for logging and scheduler step
-            total_loss_epoch = accelerator.reduce(total_loss_epoch, reduction="sum").item()
-            total_samples = accelerator.reduce(total_samples, reduction="sum").item()
+            total_loss_epoch = _reduced_scalar(total_loss_epoch)
+            total_samples = _reduced_scalar(total_samples)
             total_loss_avg = total_loss_epoch / total_samples
 
             self.scheduler.step(total_loss_avg)
 
             if epoch % self.config.log_interval == 0:
-                ics_loss_epoch = accelerator.reduce(ics_loss_epoch, reduction="sum").item()
-                bcs_loss_epoch = accelerator.reduce(bcs_loss_epoch, reduction="sum").item()
-                res_loss_epoch = accelerator.reduce(res_loss_epoch, reduction="sum").item()
+                ics_loss_epoch = _reduced_scalar(ics_loss_epoch)
+                bcs_loss_epoch = _reduced_scalar(bcs_loss_epoch)
+                res_loss_epoch = _reduced_scalar(res_loss_epoch)
                 
                 ics_loss_avg = ics_loss_epoch / total_samples
                 bcs_loss_avg = bcs_loss_epoch / total_samples

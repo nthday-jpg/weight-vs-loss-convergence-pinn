@@ -72,7 +72,6 @@ class NavierStokesPINN(nn.Module):
 
         # Total-energy residual:
         # dE/dt + d(u(E+p))/dx - d(u*tau - q)/dx = 0, q = -kappa*dT/dx
-        rho_safe = torch.clamp(rho, min=1e-6)
         E = p / (gamma - 1.0) + 0.5 * rho * u**2
         E_t = torch.autograd.grad(
             E,
@@ -89,7 +88,7 @@ class NavierStokesPINN(nn.Module):
             create_graph=False,
             retain_graph=True,
         )[0]
-        T = p / (rho_safe * gas_constant)
+        T = p / (rho * gas_constant)
         T_x = torch.autograd.grad(
             T,
             x,

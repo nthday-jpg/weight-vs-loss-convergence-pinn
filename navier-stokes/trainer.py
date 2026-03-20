@@ -190,6 +190,11 @@ class Trainer:
 				total_samples += self.batch_size
 
 				accelerator.backward(total_loss)
+				if self.config.max_grad_norm is not None and self.config.max_grad_norm > 0:
+					accelerator.clip_grad_norm_(
+						self.model.parameters(),
+						self.config.max_grad_norm,
+					)
 				self.optimizer.step()
 
 			total_loss_epoch = _reduced_scalar(total_loss_epoch)
