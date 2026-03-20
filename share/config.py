@@ -2,6 +2,9 @@ from dataclasses import dataclass, field
 
 @dataclass
 class Config:
+    # Problem selection
+    problem: str = 'burgers'
+
     
     # Architecture
     layers: list[int] = field(default_factory=lambda: [2, 32, 1])
