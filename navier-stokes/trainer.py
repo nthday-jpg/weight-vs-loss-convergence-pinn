@@ -7,7 +7,7 @@ import torch
 from accelerate import Accelerator
 from tqdm import tqdm
 
-from ..balancer import create_balancer
+from balancer import create_balancer
 from .model import NavierStokesPINN
 
 
