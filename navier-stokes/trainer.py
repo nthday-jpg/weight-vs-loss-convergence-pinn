@@ -8,7 +8,7 @@ from accelerate import Accelerator
 from tqdm import tqdm
 
 from balancer import create_balancer
-from .model import NavierStokesPINN
+from model import NavierStokesPINN
 
 
 def load_navier_stokes_data(data_path: Union[str, Path], is_torch: bool = True):
