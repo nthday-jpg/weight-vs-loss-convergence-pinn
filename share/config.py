@@ -9,6 +9,7 @@ class Config:
     layers: list[int] = field(default_factory=lambda: [2, 64, 64, 64, 1])
     num_epochs: int = 500
     step_per_epoch: int = 100
+    log_every_steps: int = 50
     learning_rate: float = 1e-3
     batch_size: int = 2048
     seed: int = 42

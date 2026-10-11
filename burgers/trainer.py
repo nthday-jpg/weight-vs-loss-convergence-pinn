@@ -120,6 +120,13 @@ class Trainer:
             init_kwargs=init_kwargs,
         )
 
+        # Keep identical initial parameters but sample different collocation
+        # points on each distributed worker.
+        process_seed = self.config.seed + accelerator.process_index
+        torch.manual_seed(process_seed)
+        if device.type == "cuda":
+            torch.cuda.manual_seed_all(process_seed)
+
         if accelerator.is_main_process:
             print(f"\nTraining on {device} with nu={self.model.module.nu if hasattr(self.model, 'module') else self.model.nu:.6g}")
 
@@ -129,10 +136,14 @@ class Trainer:
             disable=not accelerator.is_main_process,
             ncols=120,
         )
+        if self.config.log_every_steps < 1:
+            raise ValueError("log_every_steps must be positive")
+
         history = []
         optimization_time = 0.0
         optimizer_step = 0
         wall_start = time.perf_counter()
+        total_training_steps = self.config.num_epochs * self.config.step_per_epoch
         for epoch in progress:
             self.model.train()
             loss_names = ["ics", "bcs", "res"]
@@ -146,8 +157,9 @@ class Trainer:
             if device.type == "cuda":
                 torch.cuda.synchronize(device)
             optimization_start = time.perf_counter()
+            last_step_was_logged = False
 
-            for batch in self.sample_batches(device):
+            for local_step, batch in enumerate(self.sample_batches(device), start=1):
                 self.optimizer.zero_grad(set_to_none=True)
                 losses = self.model(batch, self.ics, self.bcs, self.data)
                 total_loss = self.balancer(losses)
@@ -159,49 +171,67 @@ class Trainer:
                     totals[name] += losses[f"{name}_loss"].detach()
                 optimizer_step += 1
 
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            optimization_time += time.perf_counter() - optimization_start
+                should_log = (
+                    optimizer_step % self.config.log_every_steps == 0
+                    or optimizer_step == total_training_steps
+                )
+                last_step_was_logged = should_log
+                if not should_log:
+                    continue
 
-            averages = {
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                optimization_time += time.perf_counter() - optimization_start
+                averages = {
+                    name: accelerator.reduce(value, reduction="mean").item()
+                    / local_step
+                    for name, value in totals.items()
+                }
+                validation_metrics = self.evaluate(split="validation")
+                wall_time = time.perf_counter() - wall_start
+                record = {
+                    "epoch": epoch + 1,
+                    "optimizer_step": optimizer_step,
+                    "optimization_time_seconds": optimization_time,
+                    "wall_time_seconds": wall_time,
+                    **{f"{name}_loss": averages[name] for name in loss_names},
+                    **validation_metrics,
+                    **{
+                        f"{name}_weight": value
+                        for name, value in self.balancer.weights.items()
+                    },
+                }
+                if accelerator.is_main_process:
+                    history.append(record)
+                    progress.set_postfix(
+                        {
+                            "loss": f"{averages['total']:.3e}",
+                            "interp": f"{validation_metrics['validation_interpolation_relative_l2']:.3e}",
+                            "extra": f"{validation_metrics['validation_extrapolation_relative_l2']:.3e}",
+                        }
+                    )
+                    accelerator.log(
+                        {"total_loss": averages["total"], **record},
+                        step=optimizer_step,
+                    )
+                self.model.train()
+                optimization_start = time.perf_counter()
+
+            if not last_step_was_logged:
+                if device.type == "cuda":
+                    torch.cuda.synchronize(device)
+                optimization_time += time.perf_counter() - optimization_start
+
+            epoch_averages = {
                 name: accelerator.reduce(value, reduction="mean").item()
                 / self.config.step_per_epoch
                 for name, value in totals.items()
             }
-            weights_used = self.balancer.weights.copy()
             adaptation_start = time.perf_counter()
             self.balancer.update(
-                {f"{name}_loss": averages[name] for name in loss_names}
+                {f"{name}_loss": epoch_averages[name] for name in loss_names}
             )
             optimization_time += time.perf_counter() - adaptation_start
-
-            validation_metrics = self.evaluate(split="validation")
-            wall_time = time.perf_counter() - wall_start
-            epoch_record = {
-                "epoch": epoch + 1,
-                "optimizer_step": optimizer_step,
-                "optimization_time_seconds": optimization_time,
-                "wall_time_seconds": wall_time,
-                **{f"{name}_loss": averages[name] for name in loss_names},
-                **validation_metrics,
-                **{f"{name}_weight": value for name, value in weights_used.items()},
-            }
-            if accelerator.is_main_process:
-                history.append(epoch_record)
-                progress.set_postfix(
-                    {
-                        "loss": f"{averages['total']:.3e}",
-                        "interp": f"{validation_metrics['validation_interpolation_relative_l2']:.3e}",
-                        "extra": f"{validation_metrics['validation_extrapolation_relative_l2']:.3e}",
-                    }
-                )
-                accelerator.log(
-                    {
-                        "total_loss": averages["total"],
-                        **epoch_record,
-                    },
-                    step=epoch,
-                )
 
         self.model = accelerator.unwrap_model(self.model)
         metrics = self.evaluate(split="test")
@@ -215,7 +245,7 @@ class Trainer:
             )
             print(f"Comparison plot: {plot_path}")
             print("Convergence history and plots logged to W&B")
-            accelerator.log(metrics, step=self.config.num_epochs)
+            accelerator.log(metrics, step=optimizer_step + 1)
         accelerator.end_training()
         return metrics
 
