@@ -246,7 +246,27 @@ class Trainer:
                         }
                     )
                     accelerator.log(
-                        {"total_loss": averages["total"], **record},
+                        {
+                            "train/total_loss": averages["total"],
+                            **{
+                                f"train/{name}_loss": averages[name]
+                                for name in loss_names
+                            },
+                            **{
+                                f"weights/{name}": value
+                                for name, value in self.balancer.weights.items()
+                            },
+                            "progress/epoch": epoch + 1,
+                            "progress/optimizer_step": optimizer_step,
+                            "progress/optimization_time_seconds": optimization_time,
+                            "progress/wall_time_seconds": wall_time,
+                            "validation/interpolation_relative_l2": validation_metrics[
+                                "validation_interpolation_relative_l2"
+                            ],
+                            "validation/extrapolation_relative_l2": validation_metrics[
+                                "validation_extrapolation_relative_l2"
+                            ],
+                        },
                         step=optimizer_step,
                     )
                 self.model.train()
@@ -272,7 +292,9 @@ class Trainer:
         metrics = self.evaluate(split="test")
         if accelerator.is_main_process:
             plot_path = self.plot_results()
-            self.log_convergence_to_wandb(accelerator, history, plot_path)
+            self.log_convergence_to_wandb(
+                accelerator, history, metrics, plot_path
+            )
             print(
                 "\nFinal average relative L2 | "
                 f"interpolation: {metrics['test_interpolation_relative_l2']:.3e}, "
@@ -280,7 +302,17 @@ class Trainer:
             )
             print(f"Comparison plot: {plot_path}")
             print("Convergence history and plots logged to W&B")
-            accelerator.log(metrics, step=optimizer_step + 1)
+            accelerator.log(
+                {
+                    "test/interpolation_relative_l2": metrics[
+                        "test_interpolation_relative_l2"
+                    ],
+                    "test/extrapolation_relative_l2": metrics[
+                        "test_extrapolation_relative_l2"
+                    ],
+                },
+                step=optimizer_step + 1,
+            )
         accelerator.end_training()
         return metrics
 
@@ -472,42 +504,69 @@ class Trainer:
         return metrics
 
     @staticmethod
-    def log_convergence_to_wandb(accelerator, history, comparison_path):
-        """Log the complete history and convergence charts to the W&B run."""
+    def log_convergence_to_wandb(accelerator, history, test_metrics, comparison_path):
+        """Log full data as tables but expose only four readable charts."""
         run = accelerator.get_tracker("wandb", unwrap=True)
         columns = list(history[0])
-        table = wandb.Table(
+        history_table = wandb.Table(
             columns=columns,
             data=[[row[column] for column in columns] for row in history],
         )
+        test_table = wandb.Table(
+            columns=["metric", "value"],
+            data=[[name, value] for name, value in sorted(test_metrics.items())],
+        )
         artifacts = {
-            "convergence/history": table,
+            "tables/convergence_history": history_table,
+            "tables/test_metrics": test_table,
             "evaluation/comparison": wandb.Image(comparison_path),
         }
-        metric_specs = (
-            ("relative_l2", "Relative L2"),
-            ("relative_linf", "Relative Linf"),
-            ("r2", "R2"),
-            ("gradient_relative_l2", "Gradient relative L2"),
-            ("high_frequency_error_ratio", "High-frequency error"),
-            ("total_variation_relative_error", "Total-variation error"),
+
+        def two_region_chart(metric, x_key, x_label, title):
+            return wandb.plot.line_series(
+                xs=[row[x_key] for row in history],
+                ys=[
+                    [row[f"validation_interpolation_{metric}"] for row in history],
+                    [row[f"validation_extrapolation_{metric}"] for row in history],
+                ],
+                keys=["interpolation", "extrapolation"],
+                title=title,
+                xname=x_label,
+            )
+
+        artifacts["convergence/relative_l2_vs_time"] = two_region_chart(
+            "relative_l2",
+            "optimization_time_seconds",
+            "Optimization time (seconds)",
+            "Relative L2 vs optimization time",
         )
-        for x_key, x_label, suffix in (
-            ("optimization_time_seconds", "Optimization time (seconds)", "time"),
-            ("optimizer_step", "Optimizer updates", "steps"),
-        ):
-            x_values = [row[x_key] for row in history]
-            for metric, label in metric_specs:
-                artifacts[f"convergence/{metric}_vs_{suffix}"] = wandb.plot.line_series(
-                    xs=x_values,
-                    ys=[
-                        [row[f"validation_interpolation_{metric}"] for row in history],
-                        [row[f"validation_extrapolation_{metric}"] for row in history],
-                    ],
-                    keys=["interpolation", "extrapolation"],
-                    title=f"{label} vs {x_label}",
-                    xname=x_label,
-                )
+        artifacts["convergence/relative_l2_vs_steps"] = two_region_chart(
+            "relative_l2", "optimizer_step", "Optimizer updates", "Relative L2 vs steps"
+        )
+        artifacts["convergence/r2_vs_steps"] = two_region_chart(
+            "r2", "optimizer_step", "Optimizer updates", "R2 vs steps"
+        )
+
+        shock_metrics = (
+            ("gradient_relative_l2", "gradient"),
+            ("high_frequency_error_ratio", "high-frequency"),
+            ("total_variation_relative_error", "total-variation"),
+        )
+        artifacts["convergence/shock_metrics_vs_steps"] = wandb.plot.line_series(
+            xs=[row["optimizer_step"] for row in history],
+            ys=[
+                [row[f"validation_{region}_{metric}"] for row in history]
+                for metric, _ in shock_metrics
+                for region in ("interpolation", "extrapolation")
+            ],
+            keys=[
+                f"{region}-{label}"
+                for _, label in shock_metrics
+                for region in ("interpolation", "extrapolation")
+            ],
+            title="Shock-sensitive metrics vs optimizer updates",
+            xname="Optimizer updates",
+        )
         run.log(artifacts)
 
     def plot_results(self):
