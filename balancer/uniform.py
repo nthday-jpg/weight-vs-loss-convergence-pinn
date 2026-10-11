@@ -1,20 +1,19 @@
 from .base import BaseBalancer
 from .registry import register_balancer
 
-@register_balancer('uniform')
+
+@register_balancer("uniform")
 class UniformBalancer(BaseBalancer):
+    """Give every loss component the same weight."""
+
     def __init__(self):
         super().__init__()
-        self.weights = {
-            'ics': 1.0/3.0,
-            'bcs': 1.0/3.0,
-            'res': 1.0/3.0
-        }
-    
+
     def __call__(self, loss_dict):
-        total_loss = (
-            self.weights['ics'] * loss_dict['ics_loss']
-            + self.weights['bcs'] * loss_dict['bcs_loss']
-            + self.weights['res'] * loss_dict['res_loss']
+        names = [key.removesuffix("_loss") for key in loss_dict]
+        if set(names) != set(self.weights):
+            weight = 1.0 / len(names)
+            self.weights = {name: weight for name in names}
+        return sum(
+            self.weights[name] * loss_dict[f"{name}_loss"] for name in names
         )
-        return total_loss

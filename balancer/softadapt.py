@@ -28,10 +28,8 @@ class SoftAdaptBalancer(BaseBalancer):
         self.normalized = normalized
         self.loss_weighted = loss_weighted
         self.epsilon = epsilon
-        self.weights = {"ics": 1.0 / 3.0, "bcs": 1.0 / 3.0, "res": 1.0 / 3.0}
-        self.history = {
-            name: deque(maxlen=history_length) for name in self.weights
-        }
+        self.weights = {}
+        self.history = {}
 
         # Weights for the derivative at the newest point of an equally spaced
         # interpolation polynomial. This is an (n - 1)-order finite difference.
@@ -43,13 +41,23 @@ class SoftAdaptBalancer(BaseBalancer):
 
     @staticmethod
     def _current_losses(loss_dict):
-        return {
-            "ics": float(loss_dict["ics_loss"].detach()),
-            "bcs": float(loss_dict["bcs_loss"].detach()),
-            "res": float(loss_dict["res_loss"].detach()),
-        }
+        current = {}
+        for key, value in loss_dict.items():
+            if hasattr(value, "detach"):
+                value = value.detach().item()
+            current[key.removesuffix("_loss")] = float(value)
+        return current
+
+    def _ensure_components(self, names):
+        if set(names) != set(self.history):
+            weight = 1.0 / len(names)
+            self.weights = {name: weight for name in names}
+            self.history = {
+                name: deque(maxlen=self.history_length) for name in names
+            }
 
     def _record(self, current):
+        self._ensure_components(current)
         for name, value in current.items():
             self.history[name].append(value)
 
@@ -90,13 +98,18 @@ class SoftAdaptBalancer(BaseBalancer):
         self.weights = weights
 
     def __call__(self, loss_dict):
-        current = self._current_losses(loss_dict)
-        self._record(current)
-        # The algorithm requires n stored observations before adapting weights.
-        if self._history_is_full():
-            self._update_weights()
-
+        names = [key.removesuffix("_loss") for key in loss_dict]
+        self._ensure_components(names)
         return sum(
             self.weights[name] * loss_dict[f"{name}_loss"]
             for name in self.weights
         )
+
+    def update(self, loss_dict):
+        """Update once from epoch-averaged component losses."""
+        current = self._current_losses(loss_dict)
+        self._record(current)
+        # n complete epochs are required before weights change. New weights are
+        # then held fixed throughout the following epoch.
+        if self._history_is_full():
+            self._update_weights()

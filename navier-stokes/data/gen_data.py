@@ -28,11 +28,24 @@ def ddx_periodic(q, dx):
 	return (np.roll(q, -1, axis=-1) - np.roll(q, 1, axis=-1)) / (2.0 * dx)
 
 
-def build_initial_condition(x, gamma=1.4):
-	"""Smooth periodic initial condition suitable for FFT-friendly domains."""
-	rho = 1.0 + 0.2 * np.sin(2.0 * np.pi * x)
-	u = 0.5 * np.sin(2.0 * np.pi * x + 0.35)
-	p = 1.0 + 0.2 * np.cos(2.0 * np.pi * x)
+def build_initial_condition(x, gamma=1.4, flow_case="smooth"):
+	"""Periodic initial conditions with increasing gradient difficulty."""
+	phase = 2.0 * np.pi * x
+	if flow_case == "smooth":
+		rho = 1.0 + 0.2 * np.sin(phase)
+		u = 0.5 * np.sin(phase + 0.35)
+		p = 1.0 + 0.2 * np.cos(phase)
+	elif flow_case == "steep":
+		rho = 1.0 + 0.15 * np.sin(phase)
+		u = 0.8 * np.sin(phase + 0.2)
+		p = 1.0 + 0.15 * np.cos(phase)
+	elif flow_case == "shock":
+		# A strong compressive velocity wave steepens into periodic shocks.
+		rho = 1.0 + 0.05 * np.sin(phase)
+		u = 1.0 * np.sin(phase)
+		p = 1.0 + 0.05 * np.cos(phase)
+	else:
+		raise ValueError(f"Unknown flow case: {flow_case}")
 	return primitive_to_conservative(rho, u, p, gamma=gamma)
 
 
@@ -44,6 +57,8 @@ def solve_compressible_1d_navier_stokes(
 	mu=1e-2,
 	prandtl=0.72,
 	gas_constant=1.0,
+	flow_case="smooth",
+	spatial_scheme="central",
 ):
 	"""
 	Solve periodic 1D compressible Navier-Stokes equations in conservative form.
@@ -53,7 +68,10 @@ def solve_compressible_1d_navier_stokes(
 	x = np.linspace(0.0, 1.0, nx, endpoint=False, dtype=np.float64)
 	dx = x[1] - x[0]
 
-	U0 = build_initial_condition(x, gamma=gamma)
+	if spatial_scheme not in {"central", "rusanov"}:
+		raise ValueError("spatial_scheme must be 'central' or 'rusanov'")
+
+	U0 = build_initial_condition(x, gamma=gamma, flow_case=flow_case)
 	y0 = U0.reshape(-1)
 
 	cv = gas_constant / (gamma - 1.0)
@@ -64,14 +82,22 @@ def solve_compressible_1d_navier_stokes(
 		U = y.reshape(3, nx)
 		rho, u, p = conservative_to_primitive(U, gamma=gamma)
 
-		# Inviscid flux F(U)
-		F1 = rho * u
-		F2 = rho * u**2 + p
-		F3 = u * (U[2] + p)
-
-		dF1_dx = ddx_periodic(F1, dx)
-		dF2_dx = ddx_periodic(F2, dx)
-		dF3_dx = ddx_periodic(F3, dx)
+		# Inviscid flux F(U). Rusanov adds shock-capturing numerical diffusion.
+		flux = np.stack(
+			[rho * u, rho * u**2 + p, u * (U[2] + p)], axis=0
+		)
+		if spatial_scheme == "rusanov":
+			wave_speed = np.abs(u) + np.sqrt(gamma * p / rho)
+			max_wave_speed = np.maximum(wave_speed, np.roll(wave_speed, -1))
+			interface_flux = 0.5 * (flux + np.roll(flux, -1, axis=-1))
+			interface_flux -= 0.5 * max_wave_speed * (
+				np.roll(U, -1, axis=-1) - U
+			)
+			flux_x = (interface_flux - np.roll(interface_flux, 1, axis=-1)) / dx
+		else:
+			flux_x = np.stack(
+				[ddx_periodic(component, dx) for component in flux], axis=0
+			)
 
 		# Viscous/heat terms
 		ux = ddx_periodic(u, dx)
@@ -84,15 +110,18 @@ def solve_compressible_1d_navier_stokes(
 		dtau_dx = ddx_periodic(tau, dx)
 		d_visc_energy_dx = ddx_periodic(u * tau - q, dx)
 
-		drho_dt = -dF1_dx
-		dmom_dt = -dF2_dx + dtau_dx
-		dE_dt = -dF3_dx + d_visc_energy_dx
+		drho_dt = -flux_x[0]
+		dmom_dt = -flux_x[1] + dtau_dx
+		dE_dt = -flux_x[2] + d_visc_energy_dx
 
 		return np.stack([drho_dt, dmom_dt, dE_dt], axis=0).reshape(-1)
 
 	t_eval = np.linspace(0.0, t_final, steps + 1, dtype=np.float64)
 
-	print(f"Solving periodic 1D compressible Navier-Stokes (nx={nx}, steps={steps})")
+	print(
+		f"Solving periodic 1D compressible Navier-Stokes "
+		f"(case={flow_case}, scheme={spatial_scheme}, nx={nx}, steps={steps})"
+	)
 	print(
 		f"gamma={gamma:.4f}, mu={mu:.3e}, Pr={prandtl:.3f}, R={gas_constant:.3f}, t_final={t_final:.3f}"
 	)
@@ -127,6 +156,8 @@ def solve_compressible_1d_navier_stokes(
 		"mu": np.float32(mu),
 		"prandtl": np.float32(prandtl),
 		"gas_constant": np.float32(gas_constant),
+		"flow_case": np.asarray(flow_case),
+		"spatial_scheme": np.asarray(spatial_scheme),
 	}
 
 
@@ -142,8 +173,13 @@ def save_data(data, save_dir="navier-stokes/data", base_name="navier_stokes_1d")
 	print(f"Saved NumPy data to {npz_path}")
 
 	pt_data = {
-		k: torch.tensor(v) if isinstance(v, np.ndarray) or np.isscalar(v) else v
-		for k, v in data.items()
+		key: (
+			torch.tensor(value)
+			if (isinstance(value, np.ndarray) and value.dtype.kind not in "UOS")
+			or (np.isscalar(value) and not isinstance(value, str))
+			else str(value)
+		)
+		for key, value in data.items()
 	}
 	torch.save(pt_data, pt_path)
 	print(f"Saved PyTorch data to {pt_path}")
@@ -160,6 +196,18 @@ def main():
 	parser.add_argument("--mu", type=float, default=1e-2, help="Dynamic viscosity")
 	parser.add_argument("--prandtl", type=float, default=0.72, help="Prandtl number")
 	parser.add_argument("--gas_constant", type=float, default=1.0, help="Gas constant")
+	parser.add_argument(
+		"--flow_case",
+		choices=("smooth", "steep", "shock"),
+		default="smooth",
+		help="Initial condition difficulty",
+	)
+	parser.add_argument(
+		"--spatial_scheme",
+		choices=("central", "rusanov"),
+		default="central",
+		help="Use Rusanov for shock-forming data",
+	)
 	parser.add_argument(
 		"--save_dir", type=str, default="navier-stokes/data", help="Output directory"
 	)
@@ -181,6 +229,8 @@ def main():
 		mu=args.mu,
 		prandtl=args.prandtl,
 		gas_constant=args.gas_constant,
+		flow_case=args.flow_case,
+		spatial_scheme=args.spatial_scheme,
 	)
 
 	save_data(data, save_dir=args.save_dir, base_name=args.base_name)

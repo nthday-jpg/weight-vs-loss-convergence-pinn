@@ -1,6 +1,8 @@
 from dataclasses import asdict
+import time
 
 import torch
+import wandb
 from accelerate import Accelerator
 from tqdm import tqdm
 
@@ -62,6 +64,34 @@ class Trainer:
             ),
             "u": torch.cat([boundary_u[:, 0], boundary_u[:, -1]]),
         }
+        self.data = self._sample_interior_data(config.num_data_points)
+
+    def _sample_interior_data(self, count):
+        if count == 0:
+            return None
+        if count < 0:
+            raise ValueError("num_data_points cannot be negative")
+
+        time_indices = torch.where(
+            (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
+        )[0]
+        # Exclude the two supervised boundary coordinates.
+        interior_x = torch.arange(1, len(self.dataset["x"]) - 1)
+        candidate_count = len(time_indices) * len(interior_x)
+        if count > candidate_count:
+            raise ValueError(
+                f"Requested {count} data points, but only {candidate_count} are available."
+            )
+
+        generator = torch.Generator().manual_seed(self.config.seed)
+        flat_indices = torch.randperm(candidate_count, generator=generator)[:count]
+        selected_t = time_indices[flat_indices // len(interior_x)]
+        selected_x = interior_x[flat_indices % len(interior_x)]
+        return {
+            "t": self.dataset["t"][selected_t],
+            "x": self.dataset["x"][selected_x],
+            "u": self.dataset["usol"][selected_t, selected_x],
+        }
 
     def sample_batches(self, device):
         for _ in range(self.config.step_per_epoch):
@@ -78,6 +108,8 @@ class Trainer:
         self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
         self.ics = {key: value.to(device) for key, value in self.ics.items()}
         self.bcs = {key: value.to(device) for key, value in self.bcs.items()}
+        if self.data is not None:
+            self.data = {key: value.to(device) for key, value in self.data.items()}
 
         init_kwargs = {}
         if self.config.wandb_run_name:
@@ -97,28 +129,65 @@ class Trainer:
             disable=not accelerator.is_main_process,
             ncols=120,
         )
+        history = []
+        optimization_time = 0.0
+        optimizer_step = 0
+        wall_start = time.perf_counter()
         for epoch in progress:
             self.model.train()
-            totals = {name: torch.zeros((), device=device) for name in ("total", "ics", "bcs", "res")}
+            loss_names = ["ics", "bcs", "res"]
+            if self.data is not None:
+                loss_names.append("data")
+            totals = {
+                name: torch.zeros((), device=device)
+                for name in ["total", *loss_names]
+            }
+
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            optimization_start = time.perf_counter()
 
             for batch in self.sample_batches(device):
                 self.optimizer.zero_grad(set_to_none=True)
-                losses = self.model(batch, self.ics, self.bcs)
+                losses = self.model(batch, self.ics, self.bcs, self.data)
                 total_loss = self.balancer(losses)
                 accelerator.backward(total_loss)
                 self.optimizer.step()
 
                 totals["total"] += total_loss.detach()
-                for name in ("ics", "bcs", "res"):
+                for name in loss_names:
                     totals[name] += losses[f"{name}_loss"].detach()
+                optimizer_step += 1
+
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            optimization_time += time.perf_counter() - optimization_start
 
             averages = {
                 name: accelerator.reduce(value, reduction="mean").item()
                 / self.config.step_per_epoch
                 for name, value in totals.items()
             }
+            weights_used = self.balancer.weights.copy()
+            adaptation_start = time.perf_counter()
+            self.balancer.update(
+                {f"{name}_loss": averages[name] for name in loss_names}
+            )
+            optimization_time += time.perf_counter() - adaptation_start
+
             validation_metrics = self.evaluate(split="validation")
+            wall_time = time.perf_counter() - wall_start
+            epoch_record = {
+                "epoch": epoch + 1,
+                "optimizer_step": optimizer_step,
+                "optimization_time_seconds": optimization_time,
+                "wall_time_seconds": wall_time,
+                **{f"{name}_loss": averages[name] for name in loss_names},
+                **validation_metrics,
+                **{f"{name}_weight": value for name, value in weights_used.items()},
+            }
             if accelerator.is_main_process:
+                history.append(epoch_record)
                 progress.set_postfix(
                     {
                         "loss": f"{averages['total']:.3e}",
@@ -129,11 +198,7 @@ class Trainer:
                 accelerator.log(
                     {
                         "total_loss": averages["total"],
-                        "ics_loss": averages["ics"],
-                        "bcs_loss": averages["bcs"],
-                        "res_loss": averages["res"],
-                        **validation_metrics,
-                        **{f"{name}_weight": value for name, value in self.balancer.weights.items()},
+                        **epoch_record,
                     },
                     step=epoch,
                 )
@@ -142,12 +207,14 @@ class Trainer:
         metrics = self.evaluate(split="test")
         if accelerator.is_main_process:
             plot_path = self.plot_results()
+            self.log_convergence_to_wandb(accelerator, history, plot_path)
             print(
                 "\nFinal relative L2 | "
                 f"interpolation: {metrics['test_interpolation_relative_l2']:.3e}, "
                 f"extrapolation: {metrics['test_extrapolation_relative_l2']:.3e}"
             )
             print(f"Comparison plot: {plot_path}")
+            print("Convergence history and plots logged to W&B")
             accelerator.log(metrics, step=self.config.num_epochs)
         accelerator.end_training()
         return metrics
@@ -188,6 +255,35 @@ class Trainer:
                 / torch.linalg.vector_norm(region_target)
             ).item()
         return metrics
+
+    @staticmethod
+    def log_convergence_to_wandb(accelerator, history, comparison_path):
+        run = accelerator.get_tracker("wandb", unwrap=True)
+        columns = list(history[0])
+        table = wandb.Table(
+            columns=columns,
+            data=[[row[column] for column in columns] for row in history],
+        )
+        x_axes = (
+            ("optimization_time_seconds", "Optimization time (seconds)", "time"),
+            ("optimizer_step", "Optimizer updates", "steps"),
+        )
+        artifacts = {
+            "convergence/history": table,
+            "evaluation/comparison": wandb.Image(comparison_path),
+        }
+        for x_key, x_label, suffix in x_axes:
+            artifacts[f"convergence/relative_l2_vs_{suffix}"] = wandb.plot.line_series(
+                xs=[row[x_key] for row in history],
+                ys=[
+                    [row["validation_interpolation_relative_l2"] for row in history],
+                    [row["validation_extrapolation_relative_l2"] for row in history],
+                ],
+                keys=["interpolation", "extrapolation"],
+                title=f"Relative L2 vs {x_label}",
+                xname=x_label,
+            )
+        run.log(artifacts)
 
     def plot_results(self):
         """Save ground truth, prediction, and absolute error heatmaps."""

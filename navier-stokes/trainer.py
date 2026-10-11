@@ -1,10 +1,12 @@
 from dataclasses import asdict
 from pathlib import Path
+import time
 from typing import Union
 
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
+import wandb
 from accelerate import Accelerator
 from tqdm import tqdm
 
@@ -96,6 +98,35 @@ class Trainer:
             "x_left": torch.full((nt,), self.x_start),
             "x_right": torch.full((nt,), self.x_end),
         }
+        self.data = self._sample_interior_data(config.num_data_points)
+
+    def _sample_interior_data(self, count):
+        if count == 0:
+            return None
+        if count < 0:
+            raise ValueError("num_data_points cannot be negative")
+
+        time_indices = torch.where(
+            (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
+        )[0]
+        nx = len(self.dataset["x"])
+        candidate_count = len(time_indices) * nx
+        if count > candidate_count:
+            raise ValueError(
+                f"Requested {count} data points, but only {candidate_count} are available."
+            )
+
+        generator = torch.Generator().manual_seed(self.config.seed)
+        flat_indices = torch.randperm(candidate_count, generator=generator)[:count]
+        selected_t = time_indices[flat_indices // nx]
+        selected_x = flat_indices % nx
+        return {
+            "t": self.dataset["t"][selected_t],
+            "x": self.dataset["x"][selected_x],
+            "rho": self.dataset["rho"][selected_t, selected_x],
+            "u": self.dataset["u"][selected_t, selected_x],
+            "p": self.dataset["p"][selected_t, selected_x],
+        }
 
     def sample_batches(self, device):
         for _ in range(self.config.step_per_epoch):
@@ -112,6 +143,8 @@ class Trainer:
         self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
         self.ics = {key: value.to(device) for key, value in self.ics.items()}
         self.bcs = {key: value.to(device) for key, value in self.bcs.items()}
+        if self.data is not None:
+            self.data = {key: value.to(device) for key, value in self.data.items()}
 
         init_kwargs = {}
         if self.config.wandb_run_name:
@@ -131,28 +164,65 @@ class Trainer:
             disable=not accelerator.is_main_process,
             ncols=120,
         )
+        history = []
+        optimization_time = 0.0
+        optimizer_step = 0
+        wall_start = time.perf_counter()
         for epoch in progress:
             self.model.train()
-            totals = {name: torch.zeros((), device=device) for name in ("total", "ics", "bcs", "res")}
+            loss_names = ["ics", "bcs", "res"]
+            if self.data is not None:
+                loss_names.append("data")
+            totals = {
+                name: torch.zeros((), device=device)
+                for name in ["total", *loss_names]
+            }
+
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            optimization_start = time.perf_counter()
 
             for batch in self.sample_batches(device):
                 self.optimizer.zero_grad(set_to_none=True)
-                losses = self.model(batch, self.ics, self.bcs)
+                losses = self.model(batch, self.ics, self.bcs, self.data)
                 total_loss = self.balancer(losses)
                 accelerator.backward(total_loss)
                 self.optimizer.step()
 
                 totals["total"] += total_loss.detach()
-                for name in ("ics", "bcs", "res"):
+                for name in loss_names:
                     totals[name] += losses[f"{name}_loss"].detach()
+                optimizer_step += 1
+
+            if device.type == "cuda":
+                torch.cuda.synchronize(device)
+            optimization_time += time.perf_counter() - optimization_start
 
             averages = {
                 name: accelerator.reduce(value, reduction="mean").item()
                 / self.config.step_per_epoch
                 for name, value in totals.items()
             }
+            weights_used = self.balancer.weights.copy()
+            adaptation_start = time.perf_counter()
+            self.balancer.update(
+                {f"{name}_loss": averages[name] for name in loss_names}
+            )
+            optimization_time += time.perf_counter() - adaptation_start
+
             validation_metrics = self.evaluate(split="validation")
+            wall_time = time.perf_counter() - wall_start
+            epoch_record = {
+                "epoch": epoch + 1,
+                "optimizer_step": optimizer_step,
+                "optimization_time_seconds": optimization_time,
+                "wall_time_seconds": wall_time,
+                **{f"{name}_loss": averages[name] for name in loss_names},
+                **validation_metrics,
+                **{f"{name}_weight": value for name, value in weights_used.items()},
+            }
             if accelerator.is_main_process:
+                history.append(epoch_record)
                 progress.set_postfix(
                     {
                         "loss": f"{averages['total']:.3e}",
@@ -163,11 +233,7 @@ class Trainer:
                 accelerator.log(
                     {
                         "total_loss": averages["total"],
-                        "ics_loss": averages["ics"],
-                        "bcs_loss": averages["bcs"],
-                        "res_loss": averages["res"],
-                        **validation_metrics,
-                        **{f"{name}_weight": value for name, value in self.balancer.weights.items()},
+                        **epoch_record,
                     },
                     step=epoch,
                 )
@@ -176,12 +242,14 @@ class Trainer:
         metrics = self.evaluate(split="test")
         if accelerator.is_main_process:
             plot_path = self.plot_results()
+            self.log_convergence_to_wandb(accelerator, history, plot_path)
             print(
                 "\nFinal average relative L2 | "
                 f"interpolation: {metrics['test_interpolation_relative_l2']:.3e}, "
                 f"extrapolation: {metrics['test_extrapolation_relative_l2']:.3e}"
             )
             print(f"Comparison plot: {plot_path}")
+            print("Convergence history and plots logged to W&B")
             accelerator.log(metrics, step=self.config.num_epochs)
         accelerator.end_training()
         return metrics
@@ -213,29 +281,204 @@ class Trainer:
         x_indices = torch.arange(len(x), device=device)
         space_mask = x_indices.remainder(2) == (0 if split == "validation" else 1)
 
-        metrics = {}
-        region_relative_l2 = {"interpolation": [], "extrapolation": []}
-        for name, prediction in zip(("rho", "u", "p"), predictions):
-            target = self.dataset[name].to(device)
-            prediction = prediction.reshape_as(target)
-            for region, mask in (
-                ("interpolation", interpolation),
-                ("extrapolation", extrapolation),
-            ):
-                region_target = target[mask][:, space_mask]
-                error = region_target - prediction[mask][:, space_mask]
-                mse = torch.mean(error.square()).item()
-                relative_l2 = (
-                    torch.linalg.vector_norm(error)
-                    / torch.linalg.vector_norm(region_target)
-                ).item()
-                metrics[f"{split}_{region}_{name}_mse"] = mse
-                metrics[f"{split}_{region}_{name}_relative_l2"] = relative_l2
-                region_relative_l2[region].append(relative_l2)
+        targets = {
+            name: self.dataset[name].to(device) for name in ("rho", "u", "p")
+        }
+        prediction_fields = {
+            name: prediction.reshape_as(targets[name])
+            for name, prediction in zip(("rho", "u", "p"), predictions)
+        }
+        evaluation_dx = (self.x_end - self.x_start) / int(space_mask.sum())
 
-        for region, values in region_relative_l2.items():
-            metrics[f"{split}_{region}_relative_l2"] = sum(values) / len(values)
+        metrics = {}
+        region_field_metrics = {"interpolation": {}, "extrapolation": {}}
+        for region, time_mask in (
+            ("interpolation", interpolation),
+            ("extrapolation", extrapolation),
+        ):
+            region_targets = {
+                name: value[time_mask][:, space_mask]
+                for name, value in targets.items()
+            }
+            region_predictions = {
+                name: value[time_mask][:, space_mask]
+                for name, value in prediction_fields.items()
+            }
+
+            for name in ("rho", "u", "p"):
+                field_metrics = self._field_metrics(
+                    region_targets[name], region_predictions[name], evaluation_dx
+                )
+                metrics.update(
+                    {
+                        f"{split}_{region}_{name}_{metric}": value
+                        for metric, value in field_metrics.items()
+                    }
+                )
+                for metric, value in field_metrics.items():
+                    region_field_metrics[region].setdefault(metric, []).append(value)
+
+            conservative_metrics = self._conservative_metrics(
+                region_targets, region_predictions, evaluation_dx
+            )
+            metrics.update(
+                {
+                    f"{split}_{region}_{metric}": value
+                    for metric, value in conservative_metrics.items()
+                }
+            )
+
+        for region, field_metrics in region_field_metrics.items():
+            for metric, values in field_metrics.items():
+                metrics[f"{split}_{region}_{metric}"] = sum(values) / len(values)
         return metrics
+
+    @staticmethod
+    def _field_metrics(target, prediction, dx):
+        """Metrics sensitive to amplitudes, sharp gradients, and frequencies."""
+        epsilon = torch.finfo(target.dtype).eps
+        error = prediction - target
+
+        target_gradient = (
+            torch.roll(target, -1, dims=-1) - torch.roll(target, 1, dims=-1)
+        ) / (2.0 * dx)
+        prediction_gradient = (
+            torch.roll(prediction, -1, dims=-1)
+            - torch.roll(prediction, 1, dims=-1)
+        ) / (2.0 * dx)
+        gradient_error = prediction_gradient - target_gradient
+
+        target_spectrum = torch.fft.rfft(target, dim=-1)
+        prediction_spectrum = torch.fft.rfft(prediction, dim=-1)
+        spectral_error = prediction_spectrum - target_spectrum
+        high_frequency_start = max(1, (2 * target_spectrum.shape[-1]) // 3)
+
+        target_tv = torch.sum(
+            torch.abs(torch.roll(target, -1, dims=-1) - target), dim=-1
+        )
+        prediction_tv = torch.sum(
+            torch.abs(torch.roll(prediction, -1, dims=-1) - prediction), dim=-1
+        )
+
+        centered_target = target - torch.mean(target)
+        return {
+            "mse": torch.mean(error.square()).item(),
+            "relative_l1": (
+                torch.sum(torch.abs(error))
+                / (torch.sum(torch.abs(target)) + epsilon)
+            ).item(),
+            "relative_l2": (
+                torch.linalg.vector_norm(error)
+                / (torch.linalg.vector_norm(target) + epsilon)
+            ).item(),
+            "relative_linf": (
+                torch.max(torch.abs(error))
+                / (torch.max(torch.abs(target)) + epsilon)
+            ).item(),
+            "r2": (
+                1.0
+                - torch.sum(error.square())
+                / (torch.sum(centered_target.square()) + epsilon)
+            ).item(),
+            "gradient_relative_l2": (
+                torch.linalg.vector_norm(gradient_error)
+                / (torch.linalg.vector_norm(target_gradient) + epsilon)
+            ).item(),
+            "gradient_linf": torch.max(torch.abs(gradient_error)).item(),
+            "spectral_relative_l2": (
+                torch.linalg.vector_norm(spectral_error)
+                / (torch.linalg.vector_norm(target_spectrum) + epsilon)
+            ).item(),
+            "high_frequency_error_ratio": (
+                torch.linalg.vector_norm(spectral_error[..., high_frequency_start:])
+                / (torch.linalg.vector_norm(target_spectrum) + epsilon)
+            ).item(),
+            "high_frequency_energy_fraction_error": torch.abs(
+                torch.linalg.vector_norm(
+                    prediction_spectrum[..., high_frequency_start:]
+                )
+                / (torch.linalg.vector_norm(prediction_spectrum) + epsilon)
+                - torch.linalg.vector_norm(
+                    target_spectrum[..., high_frequency_start:]
+                )
+                / (torch.linalg.vector_norm(target_spectrum) + epsilon)
+            ).item(),
+            "total_variation_relative_error": (
+                torch.sum(torch.abs(prediction_tv - target_tv))
+                / (torch.sum(torch.abs(target_tv)) + epsilon)
+            ).item(),
+        }
+
+    def _conservative_metrics(self, target, prediction, dx):
+        """Compare spatial integrals of mass, momentum, and total energy."""
+        epsilon = torch.finfo(target["rho"].dtype).eps
+
+        def conserved(fields):
+            rho, velocity, pressure = fields["rho"], fields["u"], fields["p"]
+            return {
+                "mass": rho,
+                "momentum": rho * velocity,
+                "energy": pressure / (self.dataset["gamma"] - 1.0)
+                + 0.5 * rho * velocity.square(),
+            }
+
+        target_conserved = conserved(target)
+        prediction_conserved = conserved(prediction)
+        metrics = {}
+        for name in ("mass", "momentum", "energy"):
+            target_integral = target_conserved[name].sum(dim=-1) * dx
+            prediction_integral = prediction_conserved[name].sum(dim=-1) * dx
+            integral_error = prediction_integral - target_integral
+            # Normalize by the integral of |q| rather than the signed integral;
+            # total momentum can legitimately be close to zero.
+            target_scale = target_conserved[name].abs().sum(dim=-1) * dx
+            metrics[f"{name}_integral_rmse"] = torch.sqrt(
+                torch.mean(integral_error.square())
+            ).item()
+            metrics[f"{name}_integral_normalized_l2"] = (
+                torch.linalg.vector_norm(integral_error)
+                / (torch.linalg.vector_norm(target_scale) + epsilon)
+            ).item()
+        return metrics
+
+    @staticmethod
+    def log_convergence_to_wandb(accelerator, history, comparison_path):
+        """Log the complete history and convergence charts to the W&B run."""
+        run = accelerator.get_tracker("wandb", unwrap=True)
+        columns = list(history[0])
+        table = wandb.Table(
+            columns=columns,
+            data=[[row[column] for column in columns] for row in history],
+        )
+        artifacts = {
+            "convergence/history": table,
+            "evaluation/comparison": wandb.Image(comparison_path),
+        }
+        metric_specs = (
+            ("relative_l2", "Relative L2"),
+            ("relative_linf", "Relative Linf"),
+            ("r2", "R2"),
+            ("gradient_relative_l2", "Gradient relative L2"),
+            ("high_frequency_error_ratio", "High-frequency error"),
+            ("total_variation_relative_error", "Total-variation error"),
+        )
+        for x_key, x_label, suffix in (
+            ("optimization_time_seconds", "Optimization time (seconds)", "time"),
+            ("optimizer_step", "Optimizer updates", "steps"),
+        ):
+            x_values = [row[x_key] for row in history]
+            for metric, label in metric_specs:
+                artifacts[f"convergence/{metric}_vs_{suffix}"] = wandb.plot.line_series(
+                    xs=x_values,
+                    ys=[
+                        [row[f"validation_interpolation_{metric}"] for row in history],
+                        [row[f"validation_extrapolation_{metric}"] for row in history],
+                    ],
+                    keys=["interpolation", "extrapolation"],
+                    title=f"{label} vs {x_label}",
+                    xname=x_label,
+                )
+        run.log(artifacts)
 
     def plot_results(self):
         """Save ground truth, prediction, and absolute error for each field."""
@@ -284,7 +527,12 @@ class Trainer:
                 )
                 fig.colorbar(image, ax=axes[row, column])
 
-        save_path = Path("results/navier_stokes_comparison.png")
+        run_name = self.config.wandb_run_name or "navier-stokes"
+        safe_run_name = "".join(
+            character if character.isalnum() or character in "-_" else "-"
+            for character in run_name
+        )
+        save_path = Path("results") / f"{safe_run_name}_comparison.png"
         save_path.parent.mkdir(parents=True, exist_ok=True)
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
         plt.close(fig)

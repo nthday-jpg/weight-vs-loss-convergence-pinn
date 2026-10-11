@@ -18,6 +18,10 @@ class Config:
     train_time_fraction: float = 0.7
     validation_time_fraction: float = 0.85
 
+    # Sparse interior observations inside the training time domain. Zero is a
+    # physics-only PINN; a positive value is a data-assisted PINN.
+    num_data_points: int = 0
+
     # Keep uniform as the fixed baseline and SoftAdapt as the adaptive method.
     balancer_type: str = "uniform"
     softadapt_params: dict = field(
