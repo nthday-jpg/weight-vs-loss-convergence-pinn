@@ -6,7 +6,7 @@ from tqdm import tqdm
 
 from balancer import create_balancer
 from model import BurgersPINN
-from utils import load_burgers_data
+from utils import load_burgers_data, plot_comparison
 
 
 class Trainer:
@@ -30,7 +30,13 @@ class Trainer:
             **getattr(config, f"{config.balancer_type}_params", {}),
         )
 
-        self.t_end = self.dataset["t"][-1].item()
+        if not 0.0 < config.train_time_fraction < config.validation_time_fraction < 1.0:
+            raise ValueError(
+                "Expected 0 < train_time_fraction < validation_time_fraction < 1."
+            )
+        self.full_t_end = self.dataset["t"][-1].item()
+        self.train_t_end = self.full_t_end * config.train_time_fraction
+        self.validation_t_end = self.full_t_end * config.validation_time_fraction
         self.x_start = self.dataset["x"][0].item()
         self.x_end = self.dataset["x"][-1].item()
 
@@ -40,24 +46,27 @@ class Trainer:
             "x": self.dataset["x"].clone(),
             "u": self.dataset["usol"][0].clone(),
         }
-        nt = len(self.dataset["t"])
+        # Boundary targets beyond the training horizon must not leak into
+        # extrapolation validation or test regions.
+        train_time_mask = self.dataset["t"] <= self.train_t_end
+        boundary_t = self.dataset["t"][train_time_mask]
+        boundary_u = self.dataset["usol"][train_time_mask]
+        nt = len(boundary_t)
         self.bcs = {
-            "t": self.dataset["t"].repeat(2),
+            "t": boundary_t.repeat(2),
             "x": torch.cat(
                 [
                     torch.full((nt,), self.x_start),
                     torch.full((nt,), self.x_end),
                 ]
             ),
-            "u": torch.cat(
-                [self.dataset["usol"][:, 0], self.dataset["usol"][:, -1]]
-            ),
+            "u": torch.cat([boundary_u[:, 0], boundary_u[:, -1]]),
         }
 
     def sample_batches(self, device):
         for _ in range(self.config.step_per_epoch):
             yield {
-                "t": torch.rand(self.config.batch_size, device=device) * self.t_end,
+                "t": torch.rand(self.config.batch_size, device=device) * self.train_t_end,
                 "x": self.x_start
                 + torch.rand(self.config.batch_size, device=device)
                 * (self.x_end - self.x_start),
@@ -108,38 +117,92 @@ class Trainer:
                 / self.config.step_per_epoch
                 for name, value in totals.items()
             }
+            validation_metrics = self.evaluate(split="validation")
             if accelerator.is_main_process:
-                progress.set_postfix({name: f"{value:.3e}" for name, value in averages.items()})
+                progress.set_postfix(
+                    {
+                        "loss": f"{averages['total']:.3e}",
+                        "interp": f"{validation_metrics['validation_interpolation_relative_l2']:.3e}",
+                        "extra": f"{validation_metrics['validation_extrapolation_relative_l2']:.3e}",
+                    }
+                )
                 accelerator.log(
                     {
                         "total_loss": averages["total"],
                         "ics_loss": averages["ics"],
                         "bcs_loss": averages["bcs"],
                         "res_loss": averages["res"],
+                        **validation_metrics,
                         **{f"{name}_weight": value for name, value in self.balancer.weights.items()},
                     },
                     step=epoch,
                 )
 
         self.model = accelerator.unwrap_model(self.model)
-        metrics = self.evaluate()
+        metrics = self.evaluate(split="test")
         if accelerator.is_main_process:
-            print(f"\nFinal relative L2 error: {metrics['relative_l2']:.3e}")
+            plot_path = self.plot_results()
+            print(
+                "\nFinal relative L2 | "
+                f"interpolation: {metrics['test_interpolation_relative_l2']:.3e}, "
+                f"extrapolation: {metrics['test_extrapolation_relative_l2']:.3e}"
+            )
+            print(f"Comparison plot: {plot_path}")
             accelerator.log(metrics, step=self.config.num_epochs)
         accelerator.end_training()
         return metrics
 
-    def evaluate(self):
+    def evaluate(self, split="validation"):
+        """Evaluate disjoint interpolation and temporal-extrapolation points."""
+        if split not in {"validation", "test"}:
+            raise ValueError("split must be 'validation' or 'test'")
+
         self.model.eval()
         device = next(self.model.parameters()).device
+        prediction_model = self.model.module if hasattr(self.model, "module") else self.model
+        time = self.dataset["t"].to(device)
         target = self.dataset["usol"].to(device)
+        prediction = prediction_model.predict_solution(
+            time, self.dataset["x"].to(device)
+        )
+
+        interpolation = time <= self.train_t_end
+        if split == "validation":
+            extrapolation = (time > self.train_t_end) & (time <= self.validation_t_end)
+        else:
+            extrapolation = time > self.validation_t_end
+
+        # Keep reference coordinates used for epoch-level validation disjoint
+        # from those used in the final test comparison.
+        x_indices = torch.arange(target.shape[1], device=device)
+        space_mask = x_indices.remainder(2) == (0 if split == "validation" else 1)
+
+        metrics = {}
+        for region, mask in (("interpolation", interpolation), ("extrapolation", extrapolation)):
+            region_target = target[mask][:, space_mask]
+            region_prediction = prediction[mask][:, space_mask]
+            error = region_target - region_prediction
+            metrics[f"{split}_{region}_mse"] = torch.mean(error.square()).item()
+            metrics[f"{split}_{region}_relative_l2"] = (
+                torch.linalg.vector_norm(error)
+                / torch.linalg.vector_norm(region_target)
+            ).item()
+        return metrics
+
+    def plot_results(self):
+        """Save ground truth, prediction, and absolute error heatmaps."""
+        device = next(self.model.parameters()).device
         prediction = self.model.predict_solution(
             self.dataset["t"].to(device), self.dataset["x"].to(device)
         )
-        return {
-            "mse": torch.mean((target - prediction).square()).item(),
-            "relative_l2": (
-                torch.linalg.vector_norm(target - prediction)
-                / torch.linalg.vector_norm(target)
-            ).item(),
-        }
+        save_path = "results/burgers_comparison.png"
+        plot_comparison(
+            self.dataset["t"].cpu().numpy(),
+            self.dataset["x"].cpu().numpy(),
+            self.dataset["usol"].cpu().numpy(),
+            prediction.detach().cpu().numpy(),
+            save_path=save_path,
+            train_t_end=self.train_t_end,
+            validation_t_end=self.validation_t_end,
+        )
+        return save_path

@@ -1,51 +1,102 @@
-from .registry import register_balancer
-from .base import BaseBalancer
+"""SoftAdapt loss balancing from the algorithm described in the paper."""
+
+from collections import deque
 import math
 
-@register_balancer('softadapt')
+import numpy as np
+
+from .base import BaseBalancer
+from .registry import register_balancer
+
+
+@register_balancer("softadapt")
 class SoftAdaptBalancer(BaseBalancer):
-    def __init__(self, beta=0.1, ema_alpha=0.05):  
+    def __init__(
+        self,
+        beta: float = 0.1,
+        history_length: int = 5,
+        normalized: bool = False,
+        loss_weighted: bool = False,
+        epsilon: float = 1e-8,
+    ):
         super().__init__()
+        if history_length < 2:
+            raise ValueError("SoftAdapt history_length must be at least 2.")
+
         self.beta = beta
-        self.ema_alpha = ema_alpha
-        self.weights = {'ics': 1.0/3.0, 'bcs': 1.0/3.0, 'res': 1.0/3.0}
-        self.prev_losses = {}
-        
-    def _compute_rate_of_change(self, loss_dict):
-        current_losses = {
-            'ics': loss_dict['ics_loss'].detach().item(),
-            'bcs': loss_dict['bcs_loss'].detach().item(),
-            'res': loss_dict['res_loss'].detach().item(),
+        self.history_length = history_length
+        self.normalized = normalized
+        self.loss_weighted = loss_weighted
+        self.epsilon = epsilon
+        self.weights = {"ics": 1.0 / 3.0, "bcs": 1.0 / 3.0, "res": 1.0 / 3.0}
+        self.history = {
+            name: deque(maxlen=history_length) for name in self.weights
         }
 
-        prev = self.prev_losses or current_losses
-        
-        rates = {
-            k: (current_losses[k] - prev[k]) / (prev[k] + 1e-8)
-            for k in current_losses
-        }
-        
-        self.prev_losses = current_losses.copy()
-        return rates
+        # Weights for the derivative at the newest point of an equally spaced
+        # interpolation polynomial. This is an (n - 1)-order finite difference.
+        points = np.arange(-(history_length - 1), 1, dtype=np.float64)
+        vandermonde = np.vstack([points**order for order in range(history_length)])
+        derivative = np.zeros(history_length, dtype=np.float64)
+        derivative[1] = 1.0
+        self._slope_weights = np.linalg.solve(vandermonde, derivative)
 
-    def _update_weights(self, rates):
-        max_rate = max(rates.values())
-        exp_rates = {k: math.exp((v-max_rate) * self.beta) for k, v in rates.items()}
-        sum_exp = sum(exp_rates.values())
-
-        target_weights = {k: v / sum_exp for k, v in exp_rates.items()}
-        self.weights = {
-            k: self.ema_alpha * target_weights[k] + (1 - self.ema_alpha) * self.weights[k]
-            for k in self.weights
+    @staticmethod
+    def _current_losses(loss_dict):
+        return {
+            "ics": float(loss_dict["ics_loss"].detach()),
+            "bcs": float(loss_dict["bcs_loss"].detach()),
+            "res": float(loss_dict["res_loss"].detach()),
         }
-    
+
+    def _record(self, current):
+        for name, value in current.items():
+            self.history[name].append(value)
+
+    def _history_is_full(self):
+        return all(len(values) == self.history_length for values in self.history.values())
+
+    def _update_weights(self):
+        slopes = {
+            name: float(np.dot(self._slope_weights, np.asarray(values)))
+            for name, values in self.history.items()
+        }
+        averages = {
+            name: float(np.mean(values)) for name, values in self.history.items()
+        }
+
+        scores = slopes
+        if self.normalized:
+            scale = sum(abs(value) for value in slopes.values()) + self.epsilon
+            scores = {name: value / scale for name, value in slopes.items()}
+
+        max_score = max(scores.values())
+        exponentials = {
+            name: math.exp(self.beta * (value - max_score))
+            for name, value in scores.items()
+        }
+        denominator = sum(exponentials.values()) + self.epsilon
+        weights = {
+            name: value / denominator for name, value in exponentials.items()
+        }
+
+        if self.loss_weighted:
+            weighted = {
+                name: averages[name] * weights[name] for name in weights
+            }
+            denominator = sum(weighted.values()) + self.epsilon
+            weights = {name: value / denominator for name, value in weighted.items()}
+
+        self.weights = weights
+
     def __call__(self, loss_dict):
-        rates = self._compute_rate_of_change(loss_dict)
-        self._update_weights(rates)
-            
-        return (
-            self.weights['ics'] * loss_dict['ics_loss']
-            + self.weights['bcs'] * loss_dict['bcs_loss']
-            + self.weights['res'] * loss_dict['res_loss']
-        )
+        current = self._current_losses(loss_dict)
+        self._record(current)
+        # The algorithm requires n stored observations before adapting weights.
+        if self._history_is_full():
+            self._update_weights()
 
+        return sum(
+            self.weights[name] * loss_dict[f"{name}_loss"]
+            for name in self.weights
+        )

@@ -42,19 +42,33 @@ def load_burgers_data(data_path='burgers/data/burgers.npz', is_torch=False):
         'nu': nu
     }
 
-def plot_comparison(t, x, u_true, u_pred, save_path='results/comparison.png'):
+def plot_comparison(
+    t,
+    x,
+    u_true,
+    u_pred,
+    save_path='results/comparison.png',
+    train_t_end=None,
+    validation_t_end=None,
+):
     """Plot comparison between true and predicted solutions."""
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+    value_min = min(np.min(u_true), np.min(u_pred))
+    value_max = max(np.max(u_true), np.max(u_pred))
     
     # True solution
-    im1 = axes[0].pcolormesh(t, x, u_true.T, shading='auto', cmap='jet')
+    im1 = axes[0].pcolormesh(
+        t, x, u_true.T, shading='auto', cmap='jet', vmin=value_min, vmax=value_max
+    )
     axes[0].set_xlabel('Time (t)')
     axes[0].set_ylabel('Space (x)')
     axes[0].set_title('True Solution')
     plt.colorbar(im1, ax=axes[0])
     
     # PINN prediction
-    im2 = axes[1].pcolormesh(t, x, u_pred.T, shading='auto', cmap='jet')
+    im2 = axes[1].pcolormesh(
+        t, x, u_pred.T, shading='auto', cmap='jet', vmin=value_min, vmax=value_max
+    )
     axes[1].set_xlabel('Time (t)')
     axes[1].set_ylabel('Space (x)')
     axes[1].set_title('PINN Prediction')
@@ -67,6 +81,12 @@ def plot_comparison(t, x, u_true, u_pred, save_path='results/comparison.png'):
     axes[2].set_ylabel('Space (x)')
     axes[2].set_title('Absolute Error')
     plt.colorbar(im3, ax=axes[2])
+
+    for axis in axes:
+        if train_t_end is not None:
+            axis.axvline(train_t_end, color='white', linestyle='--', linewidth=1.5)
+        if validation_t_end is not None:
+            axis.axvline(validation_t_end, color='cyan', linestyle=':', linewidth=1.5)
     
     plt.tight_layout()
     Path(save_path).parent.mkdir(parents=True, exist_ok=True)

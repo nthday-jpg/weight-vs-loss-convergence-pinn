@@ -13,10 +13,20 @@ class Config:
     batch_size: int = 2048
     seed: int = 42
 
+    # Train physics only to this fraction of the available time domain. The
+    # following interval is extrapolation validation; the final interval is test.
+    train_time_fraction: float = 0.7
+    validation_time_fraction: float = 0.85
+
     # Keep uniform as the fixed baseline and SoftAdapt as the adaptive method.
     balancer_type: str = "uniform"
     softadapt_params: dict = field(
-        default_factory=lambda: {"beta": 0.1, "ema_alpha": 0.05}
+        default_factory=lambda: {
+            "beta": 0.1,
+            "history_length": 5,
+            "normalized": False,
+            "loss_weighted": False,
+        }
     )
 
     wandb_project: str = "loss-weight-convergence"
