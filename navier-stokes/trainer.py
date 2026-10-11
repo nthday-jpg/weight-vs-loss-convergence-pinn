@@ -11,270 +11,177 @@ from balancer import create_balancer
 from model import NavierStokesPINN
 
 
-def load_navier_stokes_data(data_path: Union[str, Path], is_torch: bool = True):
-	"""Load Navier-Stokes data from .pt or .npz."""
-	path_obj = Path(data_path)
-	if path_obj.suffix == ".pt":
-		data = torch.load(path_obj)
-	elif path_obj.suffix == ".npz":
-		data = np.load(path_obj)
-	else:
-		raise ValueError("Unsupported file format. Use .pt or .npz")
+def load_navier_stokes_data(data_path: Union[str, Path]):
+    """Load primitive solution fields and physical constants from .pt or .npz."""
+    path = Path(data_path)
+    if path.suffix == ".pt":
+        data = torch.load(path, map_location="cpu")
+    elif path.suffix == ".npz":
+        data = np.load(path)
+    else:
+        raise ValueError("Unsupported file format. Use .pt or .npz")
 
-	t = data["t"]
-	x = data["x"]
-	rho = data["rho"]
-	u = data["u"]
-	p = data["p"]
+    def tensor(name):
+        value = data[name]
+        return value.float() if isinstance(value, torch.Tensor) else torch.as_tensor(value, dtype=torch.float32)
 
-	if is_torch and not isinstance(t, torch.Tensor):
-		t = torch.from_numpy(t)
-		x = torch.from_numpy(x)
-		rho = torch.from_numpy(rho)
-		u = torch.from_numpy(u)
-		p = torch.from_numpy(p)
-	elif not is_torch and isinstance(t, torch.Tensor):
-		t = t.numpy()
-		x = x.numpy()
-		rho = rho.numpy()
-		u = u.numpy()
-		p = p.numpy()
+    def scalar(name, default):
+        if name not in data:
+            return default
+        value = data[name]
+        return float(value.item() if hasattr(value, "item") else value)
 
-	return {
-		"t": t.float() if isinstance(t, torch.Tensor) else t,
-		"x": x.float() if isinstance(x, torch.Tensor) else x,
-		"rho": rho.float() if isinstance(rho, torch.Tensor) else rho,
-		"u": u.float() if isinstance(u, torch.Tensor) else u,
-		"p": p.float() if isinstance(p, torch.Tensor) else p,
-	}
+    return {
+        "t": tensor("t"),
+        "x": tensor("x"),
+        "rho": tensor("rho"),
+        "u": tensor("u"),
+        "p": tensor("p"),
+        "mu": scalar("mu", 1e-2),
+        "gamma": scalar("gamma", 1.4),
+        "prandtl": scalar("prandtl", 0.72),
+        "gas_constant": scalar("gas_constant", 1.0),
+    }
 
 
 class Trainer:
-	def __init__(self, config, data_path):
-		self.config = config
-		self.num_epochs = config.num_epochs
-		self.step_per_epoch = config.step_per_epoch
-		self.batch_size = config.batch_size
+    def __init__(self, config, data_path):
+        self.config = config
+        self.dataset = load_navier_stokes_data(data_path)
+        torch.manual_seed(config.seed)
 
-		self.model = NavierStokesPINN(config.layers)
-		self.optimizer = torch.optim.Adam(
-			self.model.parameters(),
-			lr=config.learning_rate,
-			weight_decay=config.l2_reg,
-		)
-		self.scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-			self.optimizer,
-			mode="min",
-			factor=0.1,
-			patience=100,
-		)
+        self.model = NavierStokesPINN(
+            config.layers,
+            mu=self.dataset["mu"],
+            gamma=self.dataset["gamma"],
+            prandtl=self.dataset["prandtl"],
+            gas_constant=self.dataset["gas_constant"],
+        )
+        self.optimizer = torch.optim.Adam(
+            self.model.parameters(), lr=config.learning_rate
+        )
+        self.balancer = create_balancer(
+            config.balancer_type,
+            **getattr(config, f"{config.balancer_type}_params", {}),
+        )
 
-		self.balancer = create_balancer(
-			config.balancer_type,
-			**getattr(config, f"{config.balancer_type}_params", {}),
-		)
-		self.dataset = load_navier_stokes_data(data_path, is_torch=True)
+        self.t_end = self.dataset["t"][-1].item()
+        self.x_start = self.dataset["x"][0].item()
+        dx = (self.dataset["x"][1] - self.dataset["x"][0]).item()
+        # Generated periodic grids omit the repeated right endpoint.
+        self.x_end = self.dataset["x"][-1].item() + dx
 
-		self.t_end = self.dataset["t"][-1].item()
-		self.x_start = self.dataset["x"][0].item()
-		self.x_end = self.dataset["x"][-1].item()
+        nx = len(self.dataset["x"])
+        self.ics = {
+            "t": torch.zeros(nx),
+            "x": self.dataset["x"].clone(),
+            "rho": self.dataset["rho"][0].clone(),
+            "u": self.dataset["u"][0].clone(),
+            "p": self.dataset["p"][0].clone(),
+        }
 
-		# Initial conditions: (rho, u, p)(t=0, x) for all x
-		nx = len(self.dataset["x"])
-		self.ics = {
-			"t": torch.zeros(nx),
-			"x": self.dataset["x"].clone(),
-			"rho": self.dataset["rho"][0, :].clone(),
-			"u": self.dataset["u"][0, :].clone(),
-			"p": self.dataset["p"][0, :].clone(),
-		}
+        nt = len(self.dataset["t"])
+        self.bcs = {
+            "t": self.dataset["t"].clone(),
+            "x_left": torch.full((nt,), self.x_start),
+            "x_right": torch.full((nt,), self.x_end),
+        }
 
-		# Boundary conditions: values at x_left and x_right for all t
-		nt = len(self.dataset["t"])
-		x_left = self.dataset["x"][0]
-		x_right = self.dataset["x"][-1]
-		self.bcs = {
-			"t": self.dataset["t"].repeat(2),
-			"x": torch.cat([
-				torch.full((nt,), x_left),
-				torch.full((nt,), x_right),
-			]),
-			"rho": torch.cat([
-				self.dataset["rho"][:, 0],
-				self.dataset["rho"][:, -1],
-			]),
-			"u": torch.cat([
-				self.dataset["u"][:, 0],
-				self.dataset["u"][:, -1],
-			]),
-			"p": torch.cat([
-				self.dataset["p"][:, 0],
-				self.dataset["p"][:, -1],
-			]),
-		}
+    def sample_batches(self, device):
+        for _ in range(self.config.step_per_epoch):
+            yield {
+                "t": torch.rand(self.config.batch_size, device=device) * self.t_end,
+                "x": self.x_start
+                + torch.rand(self.config.batch_size, device=device)
+                * (self.x_end - self.x_start),
+            }
 
-	def sample_batches(self, device):
-		for _ in range(self.step_per_epoch):
-			t = torch.rand(self.batch_size, device=device) * self.t_end
-			x = torch.rand(self.batch_size, device=device) * (self.x_end - self.x_start) + self.x_start
-			yield {"t": t, "x": x}
+    def train(self):
+        accelerator = Accelerator(log_with="wandb")
+        device = accelerator.device
+        self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
+        self.ics = {key: value.to(device) for key, value in self.ics.items()}
+        self.bcs = {key: value.to(device) for key, value in self.bcs.items()}
 
-	def train(self):
-		def _reduced_scalar(value):
-			reduced = accelerator.reduce(value, reduction="sum")
-			if isinstance(reduced, torch.Tensor):
-				return reduced.item()
-			if isinstance(reduced, (int, float)):
-				return float(reduced)
-			raise TypeError(f"Unexpected reduced value type: {type(reduced)}")
+        init_kwargs = {}
+        if self.config.wandb_run_name:
+            init_kwargs["wandb"] = {"name": self.config.wandb_run_name}
+        accelerator.init_trackers(
+            self.config.wandb_project,
+            config=asdict(self.config),
+            init_kwargs=init_kwargs,
+        )
 
-		accelerator = Accelerator(log_with="wandb")
-		device = accelerator.device
-		is_main_process = accelerator.is_main_process
+        if accelerator.is_main_process:
+            print(f"\nTraining on {device} with mu={self.dataset['mu']:.6g}")
 
-		self.model, self.optimizer, self.scheduler = accelerator.prepare(
-			self.model, self.optimizer, self.scheduler
-		)
+        progress = tqdm(
+            range(self.config.num_epochs),
+            desc="Training",
+            disable=not accelerator.is_main_process,
+            ncols=120,
+        )
+        for epoch in progress:
+            self.model.train()
+            totals = {name: torch.zeros((), device=device) for name in ("total", "ics", "bcs", "res")}
 
-		self.ics = {k: v.to(device).requires_grad_(False) for k, v in self.ics.items()}
-		self.bcs = {k: v.to(device).requires_grad_(False) for k, v in self.bcs.items()}
+            for batch in self.sample_batches(device):
+                self.optimizer.zero_grad(set_to_none=True)
+                losses = self.model(batch, self.ics, self.bcs)
+                total_loss = self.balancer(losses)
+                accelerator.backward(total_loss)
+                self.optimizer.step()
 
-		init_kwargs = {}
-		wandb_init = {}
-		if self.config.wandb_run_name is not None:
-			wandb_init["name"] = self.config.wandb_run_name
-		if self.config.wandb_tags is not None:
-			wandb_init["tags"] = self.config.wandb_tags
-		if wandb_init:
-			init_kwargs["wandb"] = wandb_init
+                totals["total"] += total_loss.detach()
+                for name in ("ics", "bcs", "res"):
+                    totals[name] += losses[f"{name}_loss"].detach()
 
-		accelerator.init_trackers(
-			project_name=self.config.wandb_project,
-			config=asdict(self.config),
-			init_kwargs=init_kwargs,
-		)
+            averages = {
+                name: accelerator.reduce(value, reduction="mean").item()
+                / self.config.step_per_epoch
+                for name, value in totals.items()
+            }
+            if accelerator.is_main_process:
+                progress.set_postfix({name: f"{value:.3e}" for name, value in averages.items()})
+                accelerator.log(
+                    {
+                        "total_loss": averages["total"],
+                        "ics_loss": averages["ics"],
+                        "bcs_loss": averages["bcs"],
+                        "res_loss": averages["res"],
+                        **{f"{name}_weight": value for name, value in self.balancer.weights.items()},
+                    },
+                    step=epoch,
+                )
 
-		if is_main_process:
-			print(f"\nStarting training for {self.config.num_epochs} epochs...")
-			print(f"Device: {device}")
-			print(f"Learning rate: {self.config.learning_rate}")
-			print(f"Using Accelerate with {accelerator.num_processes} process(es)")
+        self.model = accelerator.unwrap_model(self.model)
+        metrics = self.evaluate()
+        if accelerator.is_main_process:
+            print(
+                "\nFinal relative L2 | "
+                f"rho: {metrics['rho_relative_l2']:.3e}, "
+                f"u: {metrics['u_relative_l2']:.3e}, "
+                f"p: {metrics['p_relative_l2']:.3e}"
+            )
+            accelerator.log(metrics, step=self.config.num_epochs)
+        accelerator.end_training()
+        return metrics
 
-		pbar = tqdm(
-			range(self.config.num_epochs),
-			desc="Training",
-			disable=not is_main_process,
-			ncols=120,
-		)
-		for epoch in pbar:
-			self.model.train()
+    def evaluate(self):
+        self.model.eval()
+        device = next(self.model.parameters()).device
+        t, x = self.dataset["t"].to(device), self.dataset["x"].to(device)
+        with torch.no_grad():
+            grid_t, grid_x = torch.meshgrid(t, x, indexing="ij")
+            predictions = self.model.u_net(grid_t.flatten(), grid_x.flatten())
 
-			total_loss_epoch = torch.tensor(0.0, device=device)
-			ics_loss_epoch = torch.tensor(0.0, device=device)
-			bcs_loss_epoch = torch.tensor(0.0, device=device)
-			res_loss_epoch = torch.tensor(0.0, device=device)
-			total_samples = torch.tensor(0, device=device)
-
-			for batch in self.sample_batches(device):
-				self.optimizer.zero_grad()
-
-				loss_dict = accelerator.unwrap_model(self.model).compute_loss(
-					batch, self.ics, self.bcs
-				)
-				total_loss = self.balancer(loss_dict)
-
-				total_loss_epoch += total_loss.detach() * self.batch_size
-				ics_loss_epoch += loss_dict["ics_loss"].detach() * self.batch_size
-				bcs_loss_epoch += loss_dict["bcs_loss"].detach() * self.batch_size
-				res_loss_epoch += loss_dict["res_loss"].detach() * self.batch_size
-				total_samples += self.batch_size
-
-				accelerator.backward(total_loss)
-				if self.config.max_grad_norm is not None and self.config.max_grad_norm > 0:
-					accelerator.clip_grad_norm_(
-						self.model.parameters(),
-						self.config.max_grad_norm,
-					)
-				self.optimizer.step()
-
-			total_loss_epoch = _reduced_scalar(total_loss_epoch)
-			total_samples = _reduced_scalar(total_samples)
-			total_loss_avg = total_loss_epoch / total_samples
-			self.scheduler.step(total_loss_avg)
-
-			if epoch % self.config.log_interval == 0:
-				ics_loss_epoch = _reduced_scalar(ics_loss_epoch)
-				bcs_loss_epoch = _reduced_scalar(bcs_loss_epoch)
-				res_loss_epoch = _reduced_scalar(res_loss_epoch)
-
-				ics_loss_avg = ics_loss_epoch / total_samples
-				bcs_loss_avg = bcs_loss_epoch / total_samples
-				res_loss_avg = res_loss_epoch / total_samples
-				unweighted_total = ics_loss_avg + bcs_loss_avg + res_loss_avg
-
-				if is_main_process:
-					pbar.set_postfix(
-						{
-							"total": f"{total_loss_avg:.3e}",
-							"ics": f"{ics_loss_avg:.3e}",
-							"bcs": f"{bcs_loss_avg:.3e}",
-							"res": f"{res_loss_avg:.3e}",
-						}
-					)
-					accelerator.log(
-						{
-							"total_loss": total_loss_avg,
-							"total_loss_unweighted": unweighted_total,
-							"ics_loss": ics_loss_avg,
-							"bcs_loss": bcs_loss_avg,
-							"res_loss": res_loss_avg,
-							"ics_weight": self.balancer.weights["ics"],
-							"bcs_weight": self.balancer.weights["bcs"],
-							"res_weight": self.balancer.weights["res"],
-						}
-					)
-
-		self.model = accelerator.unwrap_model(self.model)
-		metrics = self.evaluate()
-		if is_main_process:
-			print(
-				"\nFinal grid MSE | "
-				f"rho: {metrics['rho_mse']:.3e}, "
-				f"u: {metrics['u_mse']:.3e}, "
-				f"p: {metrics['p_mse']:.3e}, "
-				f"avg: {metrics['avg_mse']:.3e}"
-			)
-			accelerator.log(metrics)
-
-		accelerator.end_training()
-
-	def evaluate(self):
-		self.model.eval()
-		device = next(self.model.parameters()).device
-
-		t = self.dataset["t"].to(device)
-		x = self.dataset["x"].to(device)
-		rho_true = self.dataset["rho"].to(device)
-		u_true = self.dataset["u"].to(device)
-		p_true = self.dataset["p"].to(device)
-
-		with torch.no_grad():
-			T, X = torch.meshgrid(t, x, indexing="ij")
-			t_flat = T.flatten()
-			x_flat = X.flatten()
-			rho_pred, u_pred, p_pred = self.model.u_net(t_flat, x_flat)
-
-			rho_pred = rho_pred.reshape_as(T)
-			u_pred = u_pred.reshape_as(T)
-			p_pred = p_pred.reshape_as(T)
-
-			rho_mse = torch.mean((rho_true - rho_pred) ** 2).item()
-			u_mse = torch.mean((u_true - u_pred) ** 2).item()
-			p_mse = torch.mean((p_true - p_pred) ** 2).item()
-
-		return {
-			"rho_mse": rho_mse,
-			"u_mse": u_mse,
-			"p_mse": p_mse,
-			"avg_mse": (rho_mse + u_mse + p_mse) / 3.0,
-		}
+        metrics = {}
+        for name, prediction in zip(("rho", "u", "p"), predictions):
+            target = self.dataset[name].to(device)
+            prediction = prediction.reshape_as(target)
+            metrics[f"{name}_mse"] = torch.mean((target - prediction).square()).item()
+            metrics[f"{name}_relative_l2"] = (
+                torch.linalg.vector_norm(target - prediction)
+                / torch.linalg.vector_norm(target)
+            ).item()
+        return metrics

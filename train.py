@@ -1,41 +1,40 @@
-import argparse
+"""Launch one PINN experiment from environment variables.
+
+Required environment variables:
+    PINN_CONFIG: JSON object accepted by share.config.Config
+    PINN_DATA_FILE: path to the generated .pt or .npz dataset
+"""
+
 import importlib.util
 import json
+import os
 import sys
 from pathlib import Path
 
 from share.config import Config
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="Train a PINN for selected PDE problem")
-    parser.add_argument('--config_file', type=str, required=True, help='Path to JSON config file')
-    parser.add_argument('--data_file', type=str, required=True, help='Path to data file')
-    parser.add_argument(
-        '--problem',
-        type=str,
-        default=None,
-        choices=['burgers', 'navier_stokes', 'navier-stokes'],
-        help='Override problem type from config',
-    )
-    return parser.parse_args()
+def _required_env(name: str) -> str:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(f"Required environment variable {name} is not set.")
+    return value
 
 
 def _load_trainer_class(problem: str):
     root = Path(__file__).resolve().parent
-    normalized = problem.replace('-', '_').lower()
+    normalized = problem.replace("-", "_").lower()
 
-    if normalized == 'burgers':
-        trainer_file = root / 'burgers' / 'trainer.py'
-        module_name = 'burgers_trainer_module'
-    elif normalized == 'navier_stokes':
-        trainer_file = root / 'navier-stokes' / 'trainer.py'
-        module_name = 'navier_stokes_trainer_module'
+    if normalized == "burgers":
+        trainer_file = root / "burgers" / "trainer.py"
+        module_name = "burgers_trainer_module"
+    elif normalized == "navier_stokes":
+        trainer_file = root / "navier-stokes" / "trainer.py"
+        module_name = "navier_stokes_trainer_module"
     else:
-        raise ValueError(f"Unsupported problem '{problem}'. Use 'burgers' or 'navier_stokes'.")
-
-    if not trainer_file.exists():
-        raise FileNotFoundError(f"Trainer file not found: {trainer_file}")
+        raise ValueError(
+            f"Unsupported problem '{problem}'. Use 'burgers' or 'navier_stokes'."
+        )
 
     trainer_dir = str(trainer_file.parent)
     if trainer_dir not in sys.path:
@@ -50,16 +49,15 @@ def _load_trainer_class(problem: str):
 
 
 def main():
-    args = parse_args()
-    with open(args.config_file, 'r') as f:
-        config_dict = json.load(f)
+    try:
+        config_values = json.loads(_required_env("PINN_CONFIG"))
+    except json.JSONDecodeError as error:
+        raise ValueError("PINN_CONFIG must contain a valid JSON object.") from error
 
-    config = Config(**config_dict)
-    selected_problem = args.problem if args.problem is not None else config.problem
+    config = Config(**config_values)
+    trainer_class = _load_trainer_class(config.problem)
+    trainer_class(config, _required_env("PINN_DATA_FILE")).train()
 
-    Trainer = _load_trainer_class(selected_problem)
-    trainer = Trainer(config, args.data_file)
-    trainer.train()
-    
+
 if __name__ == "__main__":
     main()
