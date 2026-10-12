@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from balancer import create_balancer
 from model import NavierStokesPINN
+from share.gradient_metrics import component_gradient_metrics
 
 
 def load_navier_stokes_data(data_path: Union[str, Path]):
@@ -196,10 +197,19 @@ class Trainer:
         optimization_start = time.perf_counter()
 
         for optimizer_step in progress:
+            should_log = (
+                optimizer_step % self.config.log_every_steps == 0
+                or optimizer_step == self.config.num_steps
+            )
             batch = self.sample_batch(device)
             self.optimizer.zero_grad(set_to_none=True)
             losses = self.model(batch, self.ics, self.bcs, self.data)
             total_loss = self.balancer(losses)
+            gradient_metrics = {}
+            if should_log and self.config.track_gradient_metrics:
+                gradient_metrics = component_gradient_metrics(
+                    losses, self.model.parameters(), self.balancer.weights
+                )
             accelerator.backward(total_loss)
             self.optimizer.step()
 
@@ -208,10 +218,6 @@ class Trainer:
                 totals[name] += losses[f"{name}_loss"].detach()
             interval_step += 1
 
-            should_log = (
-                optimizer_step % self.config.log_every_steps == 0
-                or optimizer_step == self.config.num_steps
-            )
             should_adapt = (
                 optimizer_step % self.config.adapt_every_steps == 0
                 or optimizer_step == self.config.num_steps
@@ -226,6 +232,10 @@ class Trainer:
                     / interval_step
                     for name, value in totals.items()
                 }
+                gradient_metrics = {
+                    name: accelerator.reduce(value, reduction="mean").item()
+                    for name, value in gradient_metrics.items()
+                }
                 validation_metrics = self.evaluate(split="validation")
                 wall_time = time.perf_counter() - wall_start
                 record = {
@@ -233,6 +243,7 @@ class Trainer:
                     "optimization_time_seconds": optimization_time,
                     "wall_time_seconds": wall_time,
                     **{f"{name}_loss": averages[name] for name in loss_names},
+                    **gradient_metrics,
                     **validation_metrics,
                     **{
                         f"{name}_weight": value
@@ -258,6 +269,10 @@ class Trainer:
                             **{
                                 f"weights/{name}": value
                                 for name, value in self.balancer.weights.items()
+                            },
+                            **{
+                                f"gradient_diagnostics/{name}": value
+                                for name, value in gradient_metrics.items()
                             },
                             "validation/interpolation_relative_l2": validation_metrics[
                                 "validation_interpolation_relative_l2"
@@ -572,6 +587,39 @@ class Trainer:
             title="Shock-sensitive metrics vs optimizer updates",
             xname="Optimizer updates",
         )
+
+        gradient_norm_keys = [
+            key
+            for key in history[0]
+            if key.endswith("_gradient_norm")
+            and not key.endswith("_weighted_gradient_norm")
+        ]
+        weighted_norm_keys = [
+            key for key in history[0] if key.endswith("_weighted_gradient_norm")
+        ]
+        cosine_keys = [
+            key for key in history[0] if key.startswith("gradient_cosine_")
+        ]
+        steps = [row["optimizer_step"] for row in history]
+        for artifact_name, keys, title in (
+            ("gradient_norms", gradient_norm_keys, "Component gradient norms"),
+            (
+                "weighted_gradient_norms",
+                weighted_norm_keys,
+                "Weighted component gradient norms",
+            ),
+            ("gradient_cosines", cosine_keys, "Pairwise gradient cosine similarities"),
+        ):
+            if keys:
+                artifacts[f"gradient_diagnostics/{artifact_name}_vs_steps"] = (
+                    wandb.plot.line_series(
+                        xs=steps,
+                        ys=[[row[key] for row in history] for key in keys],
+                        keys=keys,
+                        title=title,
+                        xname="Optimizer updates",
+                    )
+                )
         run.log(artifacts)
 
     def plot_results(self):

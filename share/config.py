@@ -10,6 +10,7 @@ class Config:
     num_steps: int = 50_000
     adapt_every_steps: int = 100
     log_every_steps: int = 50
+    track_gradient_metrics: bool = False
     learning_rate: float = 1e-3
     batch_size: int = 2048
     seed: int = 42

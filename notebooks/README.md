@@ -18,6 +18,11 @@ Each notebook launches exactly one configuration and one W&B run. Change only th
    - Sparse interior observations are sampled only from the training time domain.
    - Keep the balancer fixed for this ablation; repeat later for the other balancer if needed.
 
+4. `04_gradient_diagnostics.ipynb`
+   - Compare raw and weighted component-gradient norms for `uniform` and `softadapt`.
+   - Track pairwise gradient cosine similarities to identify aligned or conflicting objectives.
+   - Diagnostics are measured on the current collocation batch every 100 optimizer steps.
+
 ## Fair comparisons
 
 For each pair of runs, keep architecture, optimizer, training steps, temporal split, seed, and generated dataset identical. Use at least three seeds for final results. The final test region must not be used to select hyperparameters.
