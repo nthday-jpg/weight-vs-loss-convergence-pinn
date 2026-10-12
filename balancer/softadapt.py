@@ -106,10 +106,10 @@ class SoftAdaptBalancer(BaseBalancer):
         )
 
     def update(self, loss_dict):
-        """Update once from epoch-averaged component losses."""
+        """Update once from losses averaged over an adaptation interval."""
         current = self._current_losses(loss_dict)
         self._record(current)
-        # n complete epochs are required before weights change. New weights are
-        # then held fixed throughout the following epoch.
+        # n complete adaptation intervals are required before weights change.
+        # New weights are then held fixed until the next interval ends.
         if self._history_is_full():
             self._update_weights()

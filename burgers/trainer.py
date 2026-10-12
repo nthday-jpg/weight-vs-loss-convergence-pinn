@@ -4,6 +4,7 @@ import time
 import torch
 import wandb
 from accelerate import Accelerator
+from accelerate.utils import set_seed
 from tqdm import tqdm
 
 from balancer import create_balancer
@@ -19,7 +20,10 @@ class Trainer:
             key: value.float() if isinstance(value, torch.Tensor) else value
             for key, value in self.dataset.items()
         }
-        torch.manual_seed(config.seed)
+        # Identical model initialization and deterministic host-side sampling
+        # across processes. Device-specific sampling is configured after the
+        # Accelerator has initialized its process index.
+        set_seed(config.seed)
 
         nu = self.dataset["nu"]
         nu = float(nu.item() if isinstance(nu, torch.Tensor) else nu)
@@ -93,14 +97,13 @@ class Trainer:
             "u": self.dataset["usol"][selected_t, selected_x],
         }
 
-    def sample_batches(self, device):
-        for _ in range(self.config.step_per_epoch):
-            yield {
-                "t": torch.rand(self.config.batch_size, device=device) * self.train_t_end,
-                "x": self.x_start
-                + torch.rand(self.config.batch_size, device=device)
-                * (self.x_end - self.x_start),
-            }
+    def sample_batch(self, device):
+        return {
+            "t": torch.rand(self.config.batch_size, device=device) * self.train_t_end,
+            "x": self.x_start
+            + torch.rand(self.config.batch_size, device=device)
+            * (self.x_end - self.x_start),
+        }
 
     def train(self):
         accelerator = Accelerator(log_with="wandb")
@@ -122,75 +125,75 @@ class Trainer:
 
         # Keep identical initial parameters but sample different collocation
         # points on each distributed worker.
-        process_seed = self.config.seed + accelerator.process_index
-        torch.manual_seed(process_seed)
-        if device.type == "cuda":
-            torch.cuda.manual_seed_all(process_seed)
+        set_seed(self.config.seed, device_specific=True)
 
         if accelerator.is_main_process:
             print(f"\nTraining on {device} with nu={self.model.module.nu if hasattr(self.model, 'module') else self.model.nu:.6g}")
 
+        if self.config.num_steps < 1:
+            raise ValueError("num_steps must be positive")
+        if self.config.adapt_every_steps < 1:
+            raise ValueError("adapt_every_steps must be positive")
+        if self.config.log_every_steps < 1:
+            raise ValueError("log_every_steps must be positive")
         progress = tqdm(
-            range(self.config.num_epochs),
-            desc="Training",
+            range(1, self.config.num_steps + 1),
+            desc="Training steps",
             disable=not accelerator.is_main_process,
             ncols=120,
         )
-        if self.config.log_every_steps < 1:
-            raise ValueError("log_every_steps must be positive")
 
         history = []
         optimization_time = 0.0
-        optimizer_step = 0
         wall_start = time.perf_counter()
-        total_training_steps = self.config.num_epochs * self.config.step_per_epoch
-        for epoch in progress:
-            self.model.train()
-            loss_names = ["ics", "bcs", "res"]
-            if self.data is not None:
-                loss_names.append("data")
-            totals = {
-                name: torch.zeros((), device=device)
-                for name in ["total", *loss_names]
-            }
+        loss_names = ["ics", "bcs", "res"]
+        if self.data is not None:
+            loss_names.append("data")
+        totals = {
+            name: torch.zeros((), device=device)
+            for name in ["total", *loss_names]
+        }
+        interval_step = 0
 
-            if device.type == "cuda":
-                torch.cuda.synchronize(device)
-            optimization_start = time.perf_counter()
-            last_step_was_logged = False
+        self.model.train()
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        optimization_start = time.perf_counter()
 
-            for local_step, batch in enumerate(self.sample_batches(device), start=1):
-                self.optimizer.zero_grad(set_to_none=True)
-                losses = self.model(batch, self.ics, self.bcs, self.data)
-                total_loss = self.balancer(losses)
-                accelerator.backward(total_loss)
-                self.optimizer.step()
+        for optimizer_step in progress:
+            batch = self.sample_batch(device)
+            self.optimizer.zero_grad(set_to_none=True)
+            losses = self.model(batch, self.ics, self.bcs, self.data)
+            total_loss = self.balancer(losses)
+            accelerator.backward(total_loss)
+            self.optimizer.step()
 
-                totals["total"] += total_loss.detach()
-                for name in loss_names:
-                    totals[name] += losses[f"{name}_loss"].detach()
-                optimizer_step += 1
+            totals["total"] += total_loss.detach()
+            for name in loss_names:
+                totals[name] += losses[f"{name}_loss"].detach()
+            interval_step += 1
 
-                should_log = (
-                    optimizer_step % self.config.log_every_steps == 0
-                    or optimizer_step == total_training_steps
-                )
-                last_step_was_logged = should_log
-                if not should_log:
-                    continue
+            should_log = (
+                optimizer_step % self.config.log_every_steps == 0
+                or optimizer_step == self.config.num_steps
+            )
+            should_adapt = (
+                optimizer_step % self.config.adapt_every_steps == 0
+                or optimizer_step == self.config.num_steps
+            )
 
+            if should_log:
                 if device.type == "cuda":
                     torch.cuda.synchronize(device)
                 optimization_time += time.perf_counter() - optimization_start
                 averages = {
                     name: accelerator.reduce(value, reduction="mean").item()
-                    / local_step
+                    / interval_step
                     for name, value in totals.items()
                 }
                 validation_metrics = self.evaluate(split="validation")
                 wall_time = time.perf_counter() - wall_start
                 record = {
-                    "epoch": epoch + 1,
                     "optimizer_step": optimizer_step,
                     "optimization_time_seconds": optimization_time,
                     "wall_time_seconds": wall_time,
@@ -217,21 +220,27 @@ class Trainer:
                 self.model.train()
                 optimization_start = time.perf_counter()
 
-            if not last_step_was_logged:
-                if device.type == "cuda":
-                    torch.cuda.synchronize(device)
-                optimization_time += time.perf_counter() - optimization_start
-
-            epoch_averages = {
-                name: accelerator.reduce(value, reduction="mean").item()
-                / self.config.step_per_epoch
-                for name, value in totals.items()
-            }
-            adaptation_start = time.perf_counter()
-            self.balancer.update(
-                {f"{name}_loss": epoch_averages[name] for name in loss_names}
-            )
-            optimization_time += time.perf_counter() - adaptation_start
+            if should_adapt:
+                if not should_log:
+                    if device.type == "cuda":
+                        torch.cuda.synchronize(device)
+                    optimization_time += time.perf_counter() - optimization_start
+                interval_averages = {
+                    name: accelerator.reduce(value, reduction="mean").item()
+                    / interval_step
+                    for name, value in totals.items()
+                }
+                adaptation_start = time.perf_counter()
+                self.balancer.update(
+                    {f"{name}_loss": interval_averages[name] for name in loss_names}
+                )
+                optimization_time += time.perf_counter() - adaptation_start
+                totals = {
+                    name: torch.zeros((), device=device)
+                    for name in ["total", *loss_names]
+                }
+                interval_step = 0
+                optimization_start = time.perf_counter()
 
         self.model = accelerator.unwrap_model(self.model)
         metrics = self.evaluate(split="test")
@@ -269,7 +278,7 @@ class Trainer:
         else:
             extrapolation = time > self.validation_t_end
 
-        # Keep reference coordinates used for epoch-level validation disjoint
+        # Keep reference coordinates used for training-time validation disjoint
         # from those used in the final test comparison.
         x_indices = torch.arange(target.shape[1], device=device)
         space_mask = x_indices.remainder(2) == (0 if split == "validation" else 1)

@@ -7,8 +7,8 @@ class Config:
 
     problem: str = "burgers"
     layers: list[int] = field(default_factory=lambda: [2, 64, 64, 64, 1])
-    num_epochs: int = 500
-    step_per_epoch: int = 100
+    num_steps: int = 50_000
+    adapt_every_steps: int = 100
     log_every_steps: int = 50
     learning_rate: float = 1e-3
     batch_size: int = 2048

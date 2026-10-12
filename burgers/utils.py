@@ -99,19 +99,19 @@ def plot_training_history(history, save_path='results/training_history.png'):
     """Plot training loss history."""
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
     
-    epochs = history['epoch']
+    steps = history['optimizer_step']
     
     # Total loss
-    axes[0].semilogy(epochs, history['total_loss'], 'b-', linewidth=2)
-    axes[0].set_xlabel('Epoch')
+    axes[0].semilogy(steps, history['total_loss'], 'b-', linewidth=2)
+    axes[0].set_xlabel('Optimizer step')
     axes[0].set_ylabel('Total Loss')
     axes[0].set_title('Training Loss')
     axes[0].grid(True, alpha=0.3)
     
     # Component losses
-    axes[1].semilogy(epochs, history['ics_loss'], 'r-', label='ICs Loss', linewidth=2)
-    axes[1].semilogy(epochs, history['res_loss'], 'g-', label='Residual Loss', linewidth=2)
-    axes[1].set_xlabel('Epoch')
+    axes[1].semilogy(steps, history['ics_loss'], 'r-', label='ICs Loss', linewidth=2)
+    axes[1].semilogy(steps, history['res_loss'], 'g-', label='Residual Loss', linewidth=2)
+    axes[1].set_xlabel('Optimizer step')
     axes[1].set_ylabel('Loss')
     axes[1].set_title('Loss Components')
     axes[1].legend()
@@ -119,8 +119,8 @@ def plot_training_history(history, save_path='results/training_history.png'):
     
     # L2 error
     if 'l2_error' in history:
-        axes[2].semilogy(epochs, history['l2_error'], 'm-', linewidth=2)
-        axes[2].set_xlabel('Epoch')
+        axes[2].semilogy(steps, history['l2_error'], 'm-', linewidth=2)
+        axes[2].set_xlabel('Optimizer step')
         axes[2].set_ylabel('Relative L2 Error')
         axes[2].set_title('Test Error')
         axes[2].grid(True, alpha=0.3)
