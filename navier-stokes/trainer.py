@@ -104,25 +104,44 @@ class Trainer:
             "x_right": torch.full((nt,), self.x_end),
         }
         self.data = self._sample_interior_data(config.num_data_points)
+        available_loss_names = ["ics", "bcs", "res"]
+        if self.data is not None:
+            available_loss_names.append("data")
+        if config.loss_terms is None:
+            self.loss_names = available_loss_names
+        else:
+            self.loss_names = list(dict.fromkeys(config.loss_terms))
+            unknown = set(self.loss_names) - {"ics", "bcs", "res", "data"}
+            if unknown:
+                raise ValueError(f"Unknown loss terms: {sorted(unknown)}")
+            if not self.loss_names:
+                raise ValueError("loss_terms must contain at least one loss term")
+            if "data" in self.loss_names and self.data is None:
+                raise ValueError("The data loss requires num_data_points > 0")
 
     def _sample_interior_data(self, count):
         if count == 0:
             return None
-        if count < 0:
-            raise ValueError("num_data_points cannot be negative")
+        if count != "all" and (not isinstance(count, int) or count < 0):
+            raise ValueError('num_data_points must be zero, a positive integer, or "all"')
 
-        time_indices = torch.where(
-            (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
-        )[0]
+        if count == "all":
+            time_indices = torch.where(self.dataset["t"] <= self.train_t_end)[0]
+        else:
+            time_indices = torch.where(
+                (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
+            )[0]
         nx = len(self.dataset["x"])
         candidate_count = len(time_indices) * nx
-        if count > candidate_count:
-            raise ValueError(
-                f"Requested {count} data points, but only {candidate_count} are available."
-            )
-
-        generator = torch.Generator().manual_seed(self.config.seed)
-        flat_indices = torch.randperm(candidate_count, generator=generator)[:count]
+        if count == "all":
+            flat_indices = torch.arange(candidate_count)
+        else:
+            if count > candidate_count:
+                raise ValueError(
+                    f"Requested {count} data points, but only {candidate_count} are available."
+                )
+            generator = torch.Generator().manual_seed(self.config.seed)
+            flat_indices = torch.randperm(candidate_count, generator=generator)[:count]
         selected_t = time_indices[flat_indices // nx]
         selected_x = flat_indices % nx
         return {
@@ -182,9 +201,7 @@ class Trainer:
         history = []
         optimization_time = 0.0
         wall_start = time.perf_counter()
-        loss_names = ["ics", "bcs", "res"]
-        if self.data is not None:
-            loss_names.append("data")
+        loss_names = self.loss_names
         totals = {
             name: torch.zeros((), device=device)
             for name in ["total", *loss_names]
@@ -203,7 +220,9 @@ class Trainer:
             )
             batch = self.sample_batch(device)
             self.optimizer.zero_grad(set_to_none=True)
-            losses = self.model(batch, self.ics, self.bcs, self.data)
+            losses = self.model(
+                batch, self.ics, self.bcs, self.data, loss_names=loss_names
+            )
             total_loss = self.balancer(losses)
             gradient_metrics = {}
             if should_log and self.config.track_gradient_metrics:

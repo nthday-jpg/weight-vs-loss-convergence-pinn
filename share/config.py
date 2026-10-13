@@ -20,9 +20,14 @@ class Config:
     train_time_fraction: float = 0.7
     validation_time_fraction: float = 0.85
 
-    # Sparse interior observations inside the training time domain. Zero is a
-    # physics-only PINN; a positive value is a data-assisted PINN.
-    num_data_points: int = 0
+    # Supervised observations in the training time domain. Zero disables data,
+    # a positive integer samples sparse interior points, and "all" uses the
+    # complete training grid (including the initial time and spatial edges).
+    num_data_points: int | str = 0
+
+    # Select optimizer loss terms from: ics, bcs, res, and data. None uses all
+    # available terms; selecting data requires num_data_points > 0.
+    loss_terms: list[str] | None = None
 
     # Keep uniform as the fixed baseline and SoftAdapt as the adaptive method.
     balancer_type: str = "uniform"

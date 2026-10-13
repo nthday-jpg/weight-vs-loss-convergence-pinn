@@ -36,25 +36,31 @@ class BurgersPINN(nn.Module):
         u_xx = self._derivative(u_x, x)
         return u_t + u * u_x - self.nu * u_xx
 
-    def forward(self, batch, ics, bcs, data=None):
-        t = batch["t"].requires_grad_(True)
-        x = batch["x"].requires_grad_(True)
-        u = self.u_net(t, x)
-        residual = self.r_net(u, t, x)
-        losses = {
-            "ics_loss": torch.mean((self.u_net(ics["t"], ics["x"]) - ics["u"]).square()),
-            "bcs_loss": torch.mean((self.u_net(bcs["t"], bcs["x"]) - bcs["u"]).square()),
-            "res_loss": torch.mean(residual.square()),
-        }
-        if data is not None:
+    def forward(self, batch, ics, bcs, data=None, loss_names=None):
+        requested = set(loss_names or ("ics", "bcs", "res", "data"))
+        losses = {}
+        if "ics" in requested:
+            losses["ics_loss"] = torch.mean(
+                (self.u_net(ics["t"], ics["x"]) - ics["u"]).square()
+            )
+        if "bcs" in requested:
+            losses["bcs_loss"] = torch.mean(
+                (self.u_net(bcs["t"], bcs["x"]) - bcs["u"]).square()
+            )
+        if "res" in requested:
+            t = batch["t"].requires_grad_(True)
+            x = batch["x"].requires_grad_(True)
+            u = self.u_net(t, x)
+            losses["res_loss"] = torch.mean(self.r_net(u, t, x).square())
+        if "data" in requested and data is not None:
             losses["data_loss"] = torch.mean(
                 (self.u_net(data["t"], data["x"]) - data["u"]).square()
             )
         return losses
 
-    def compute_loss(self, batch, ics, bcs, data=None):
+    def compute_loss(self, batch, ics, bcs, data=None, loss_names=None):
         """Backward-compatible alias for direct, non-distributed use."""
-        return self.forward(batch, ics, bcs, data)
+        return self.forward(batch, ics, bcs, data, loss_names)
 
     def predict_solution(self, t, x):
         self.eval()

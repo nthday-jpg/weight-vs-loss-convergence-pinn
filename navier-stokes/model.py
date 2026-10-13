@@ -101,25 +101,29 @@ class NavierStokesPINN(nn.Module):
         ) / 3.0
         return 0.5 * (value_loss + derivative_loss)
 
-    def forward(self, batch, ics, bcs, data=None):
-        t = batch["t"].requires_grad_(True)
-        x = batch["x"].requires_grad_(True)
-        primitive = self.u_net(t, x)
-        residuals = self.r_net(*primitive, t, x)
-
-        losses = {
-            "ics_loss": self._primitive_mse(
+    def forward(self, batch, ics, bcs, data=None, loss_names=None):
+        requested = set(loss_names or ("ics", "bcs", "res", "data"))
+        losses = {}
+        if "ics" in requested:
+            losses["ics_loss"] = self._primitive_mse(
                 ics, self.u_net(ics["t"], ics["x"])
-            ),
-            "bcs_loss": self._periodic_boundary_loss(bcs),
-            "res_loss": sum(torch.mean(residual.square()) for residual in residuals) / 3.0,
-        }
-        if data is not None:
+            )
+        if "bcs" in requested:
+            losses["bcs_loss"] = self._periodic_boundary_loss(bcs)
+        if "res" in requested:
+            t = batch["t"].requires_grad_(True)
+            x = batch["x"].requires_grad_(True)
+            primitive = self.u_net(t, x)
+            residuals = self.r_net(*primitive, t, x)
+            losses["res_loss"] = (
+                sum(torch.mean(residual.square()) for residual in residuals) / 3.0
+            )
+        if "data" in requested and data is not None:
             losses["data_loss"] = self._primitive_mse(
                 data, self.u_net(data["t"], data["x"])
             )
         return losses
 
-    def compute_loss(self, batch, ics, bcs, data=None):
+    def compute_loss(self, batch, ics, bcs, data=None, loss_names=None):
         """Backward-compatible alias for direct, non-distributed use."""
-        return self.forward(batch, ics, bcs, data)
+        return self.forward(batch, ics, bcs, data, loss_names)

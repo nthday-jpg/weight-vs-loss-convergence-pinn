@@ -23,6 +23,11 @@ Each notebook launches exactly one configuration and one W&B run. Change only th
    - Track pairwise gradient cosine similarities to identify aligned or conflicting objectives.
    - Diagnostics are measured on the current collocation batch every 100 optimizer steps.
 
+5. `05_data_only.ipynb`
+   - Train a supervised baseline using `data_loss` over the complete training grid.
+   - Do not compute separate initial-condition, boundary-condition, or PDE-residual losses.
+   - Keep validation- and test-time labels held out.
+
 ## Fair comparisons
 
 For each pair of runs, keep architecture, optimizer, training steps, temporal split, seed, and generated dataset identical. Use at least three seeds for final results. The final test region must not be used to select hyperparameters.
