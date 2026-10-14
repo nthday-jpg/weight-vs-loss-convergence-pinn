@@ -1,6 +1,6 @@
 # Experiment notebooks
 
-Each notebook launches exactly one configuration and one W&B run. Change only the variables in the experiment-selection cell, then rerun the notebook from the top.
+Notebooks 1–5 launch exactly one configuration and one W&B run. Change only the variables in the experiment-selection cell, then rerun the notebook from the top. Notebook 6 is an independent, local diagnostic and does not use W&B.
 
 ## Notebooks
 
@@ -27,6 +27,12 @@ Each notebook launches exactly one configuration and one W&B run. Change only th
    - Train a supervised baseline using `data_loss` over the complete training grid.
    - Do not compute separate initial-condition, boundary-condition, or PDE-residual losses.
    - Keep validation- and test-time labels held out.
+
+6. `06_tanh_linearization_hypothesis.ipynb`
+   - Standalone controlled test using an MLP `x -> u` on `[-1, 1]` and `[10, 20]`.
+   - Test a tanh network across initialization scales and seeds.
+   - Measure `u_x`, `u_xx`, and `u` residuals, tanh linearization, condition-point learning, and training trajectories.
+   - Save local CSV diagnostics and plots under `results/tanh_linearization/`.
 
 ## Fair comparisons
 
