@@ -31,7 +31,7 @@ Notebooks 1–5 launch exactly one configuration and one W&B run. Change only th
 6. `06_tanh_linearization_hypothesis.ipynb`
    - Standalone controlled test using an MLP `x -> u` on `[-1, 1]` and `[10, 20]`.
    - Test a tanh network across initialization scales and seeds.
-   - Measure `u_x`, `u_xx`, and `u` residuals, tanh linearization, condition-point learning, and training trajectories.
+   - Train with the single residual `u_xx + u = 0` while diagnosing `u`, `u_x`, `u_xx`, tanh linearization, and condition-point learning.
    - Save local CSV diagnostics and plots under `results/tanh_linearization/`.
 
 ## Fair comparisons
