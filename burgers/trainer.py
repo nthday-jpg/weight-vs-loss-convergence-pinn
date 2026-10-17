@@ -88,15 +88,14 @@ class Trainer:
         if count != "all" and (not isinstance(count, int) or count < 0):
             raise ValueError('num_data_points must be zero, a positive integer, or "all"')
 
-        if count == "all":
-            time_indices = torch.where(self.dataset["t"] <= self.train_t_end)[0]
-            spatial_indices = torch.arange(len(self.dataset["x"]))
-        else:
-            time_indices = torch.where(
-                (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
-            )[0]
-            # Sparse PINN observations exclude supervised initial/boundary points.
-            spatial_indices = torch.arange(1, len(self.dataset["x"]) - 1)
+        # Data observations must not duplicate the initial or boundary losses.
+        time_indices = torch.where(
+            (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
+        )[0]
+        spatial_indices = torch.where(
+            (self.dataset["x"] > self.x_start)
+            & (self.dataset["x"] < self.x_end)
+        )[0]
 
         candidate_count = len(time_indices) * len(spatial_indices)
         if count == "all":

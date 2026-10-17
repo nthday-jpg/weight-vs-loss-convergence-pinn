@@ -20,9 +20,9 @@ class Config:
     train_time_fraction: float = 0.7
     validation_time_fraction: float = 0.85
 
-    # Supervised observations in the training time domain. Zero disables data,
-    # a positive integer samples sparse interior points, and "all" uses the
-    # complete training grid (including the initial time and spatial edges).
+    # Supervised observations strictly inside the training space-time domain.
+    # Zero disables data, a positive integer samples interior points, and "all"
+    # uses every interior point. Initial and boundary points are always excluded.
     num_data_points: int | str = 0
 
     # Select optimizer loss terms from: ics, bcs, res, and data. None uses all

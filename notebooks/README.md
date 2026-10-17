@@ -12,9 +12,9 @@ Runs one Navier–Stokes configuration and one W&B run at a time. Use the **Run 
 - **Flow difficulty:** compare `FLOW_CASE = 'smooth'`, `'steep'`, and `'shock'`.
 - **Data ablation:** compare `NUM_DATA_POINTS = 0` with a fixed positive count.
 - **Gradient diagnostics:** set `TRACK_GRADIENT_METRICS = True` to track raw and weighted component-gradient norms and pairwise cosine similarities.
-- **Data-only baseline:** set `RUN_KIND = 'data_only'` to train on the complete training grid without separate initial-condition, boundary-condition, or PDE-residual losses.
+- **Data-only baseline:** set `RUN_KIND = 'data_only'` to train on every interior point in the training grid without separate initial-condition, boundary-condition, or PDE-residual losses.
 
-Sparse interior observations are sampled only from the training-time domain. Validation and test labels remain held out.
+All supervised observations exclude initial-time and spatial-boundary points. Validation and test labels remain held out.
 
 ### `tanh_linearization_hypothesis.ipynb`
 

@@ -122,14 +122,16 @@ class Trainer:
         if count != "all" and (not isinstance(count, int) or count < 0):
             raise ValueError('num_data_points must be zero, a positive integer, or "all"')
 
-        if count == "all":
-            time_indices = torch.where(self.dataset["t"] <= self.train_t_end)[0]
-        else:
-            time_indices = torch.where(
-                (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
-            )[0]
-        nx = len(self.dataset["x"])
-        candidate_count = len(time_indices) * nx
+        # Data observations must not duplicate the initial or boundary losses.
+        time_indices = torch.where(
+            (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
+        )[0]
+        spatial_indices = torch.where(
+            (self.dataset["x"] > self.x_start)
+            & (self.dataset["x"] < self.x_end)
+        )[0]
+
+        candidate_count = len(time_indices) * len(spatial_indices)
         if count == "all":
             flat_indices = torch.arange(candidate_count)
         else:
@@ -139,8 +141,8 @@ class Trainer:
                 )
             generator = torch.Generator().manual_seed(self.config.seed)
             flat_indices = torch.randperm(candidate_count, generator=generator)[:count]
-        selected_t = time_indices[flat_indices // nx]
-        selected_x = flat_indices % nx
+        selected_t = time_indices[flat_indices // len(spatial_indices)]
+        selected_x = spatial_indices[flat_indices % len(spatial_indices)]
         return {
             "t": self.dataset["t"][selected_t],
             "x": self.dataset["x"][selected_x],
