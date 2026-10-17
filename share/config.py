@@ -29,8 +29,7 @@ class Config:
     # available terms; selecting data requires num_data_points > 0.
     loss_terms: list[str] | None = None
 
-    # Keep uniform as the fixed baseline and SoftAdapt as the adaptive method.
-    balancer_type: str = "uniform"
+    # beta=0 gives fixed uniform weights; beta>0 enables adaptation.
     softadapt_params: dict = field(
         default_factory=lambda: {
             "beta": 0.1,

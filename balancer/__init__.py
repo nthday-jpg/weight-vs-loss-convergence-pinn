@@ -1,12 +1,4 @@
 from .base import BaseBalancer
-from .registry import create_balancer, list_balancers, register_balancer
+from .softadapt import SoftAdaptBalancer
 
-from . import uniform
-from . import softadapt
-
-__all__ = [
-    'BaseBalancer',
-    'create_balancer',
-    'list_balancers', 
-    'register_balancer',
-]
+__all__ = ["BaseBalancer", "SoftAdaptBalancer"]

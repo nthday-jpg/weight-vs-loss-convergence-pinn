@@ -6,10 +6,8 @@ import math
 import numpy as np
 
 from .base import BaseBalancer
-from .registry import register_balancer
 
 
-@register_balancer("softadapt")
 class SoftAdaptBalancer(BaseBalancer):
     def __init__(
         self,
@@ -83,7 +81,7 @@ class SoftAdaptBalancer(BaseBalancer):
             name: math.exp(self.beta * (value - max_score))
             for name, value in scores.items()
         }
-        denominator = sum(exponentials.values()) + self.epsilon
+        denominator = sum(exponentials.values())
         weights = {
             name: value / denominator for name, value in exponentials.items()
         }

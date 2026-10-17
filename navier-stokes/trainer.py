@@ -11,7 +11,7 @@ from accelerate import Accelerator
 from accelerate.utils import set_seed
 from tqdm import tqdm
 
-from balancer import create_balancer
+from balancer import SoftAdaptBalancer
 from model import NavierStokesPINN
 from share.gradient_metrics import component_gradient_metrics
 
@@ -68,10 +68,7 @@ class Trainer:
         self.optimizer = torch.optim.Adam(
             self.model.parameters(), lr=config.learning_rate
         )
-        self.balancer = create_balancer(
-            config.balancer_type,
-            **getattr(config, f"{config.balancer_type}_params", {}),
-        )
+        self.balancer = SoftAdaptBalancer(**config.softadapt_params)
 
         if not 0.0 < config.train_time_fraction < config.validation_time_fraction < 1.0:
             raise ValueError(

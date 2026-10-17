@@ -8,7 +8,7 @@ The notebook directory has two distinct entry points. The Navier–Stokes studie
 
 Runs one Navier–Stokes configuration and one W&B run at a time. Use the **Run controls** cell to reproduce all of the related studies:
 
-- **Loss weighting:** compare `BALANCER = 'uniform'` and `'softadapt'` with matched seeds.
+- **Loss weighting:** compare `SOFTADAPT_BETA = 0.0` (uniform weights) with a positive beta using matched seeds.
 - **Flow difficulty:** compare `FLOW_CASE = 'smooth'`, `'steep'`, and `'shock'`.
 - **Data ablation:** compare `NUM_DATA_POINTS = 0` with a fixed positive count.
 - **Gradient diagnostics:** set `TRACK_GRADIENT_METRICS = True` to track raw and weighted component-gradient norms and pairwise cosine similarities.
