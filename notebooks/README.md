@@ -1,41 +1,32 @@
 # Experiment notebooks
 
-Notebooks 1–5 launch exactly one configuration and one W&B run. Change only the variables in the experiment-selection cell, then rerun the notebook from the top. Notebook 6 is an independent, local diagnostic and does not use W&B.
+The notebook directory has two distinct entry points. The Navier–Stokes studies share one configurable training notebook; the tanh-linearization study is a separate local diagnostic.
 
 ## Notebooks
 
-1. `01_weighting_comparison.ipynb`
-   - Smooth flow only.
-   - Compare `uniform` against `softadapt` with matched seeds.
-   - Uses no interior observations.
+### `navier_stokes_experiments.ipynb`
 
-2. `02_flow_difficulty.ipynb`
-   - Compare weighting on `smooth`, `steep`, and `shock` cases.
-   - Run every `(flow case, balancer, seed)` combination separately.
+Runs one Navier–Stokes configuration and one W&B run at a time. Use the **Run controls** cell to reproduce all of the related studies:
 
-3. `03_data_ablation.ipynb`
-   - Compare physics-only (`NUM_DATA_POINTS = 0`) against data-assisted PINNs.
-   - Sparse interior observations are sampled only from the training time domain.
-   - Keep the balancer fixed for this ablation; repeat later for the other balancer if needed.
+- **Loss weighting:** compare `BALANCER = 'uniform'` and `'softadapt'` with matched seeds.
+- **Flow difficulty:** compare `FLOW_CASE = 'smooth'`, `'steep'`, and `'shock'`.
+- **Data ablation:** compare `NUM_DATA_POINTS = 0` with a fixed positive count.
+- **Gradient diagnostics:** set `TRACK_GRADIENT_METRICS = True` to track raw and weighted component-gradient norms and pairwise cosine similarities.
+- **Data-only baseline:** set `RUN_KIND = 'data_only'` to train on the complete training grid without separate initial-condition, boundary-condition, or PDE-residual losses.
 
-4. `04_gradient_diagnostics.ipynb`
-   - Compare raw and weighted component-gradient norms for `uniform` and `softadapt`.
-   - Track pairwise gradient cosine similarities to identify aligned or conflicting objectives.
-   - Diagnostics are measured on the current collocation batch every 100 optimizer steps.
+Sparse interior observations are sampled only from the training-time domain. Validation and test labels remain held out.
 
-5. `05_data_only.ipynb`
-   - Train a supervised baseline using `data_loss` over the complete training grid.
-   - Do not compute separate initial-condition, boundary-condition, or PDE-residual losses.
-   - Keep validation- and test-time labels held out.
+### `tanh_linearization_hypothesis.ipynb`
 
-6. `06_tanh_linearization_hypothesis.ipynb`
-   - Standalone controlled test using an MLP `x -> u` on `[-1, 1]` and `[10, 20]`.
-   - Test a tanh network across initialization scales and seeds.
-   - Train with the single residual `u_xx + u = 0` while diagnosing `u`, `u_x`, `u_xx`, tanh linearization, and condition-point learning.
-   - Save local CSV diagnostics and plots under `results/tanh_linearization/`.
+A standalone local diagnostic that does not use W&B:
+
+- Uses an MLP `x -> u` on `[-1, 1]` and `[10, 20]`.
+- Tests a tanh network across initialization scales and seeds.
+- Trains with the single residual `u_xx + u = 0` while diagnosing `u`, `u_x`, `u_xx`, tanh linearization, condition-point learning, and per-term parameter-gradient norms.
+- Saves CSV diagnostics and plots under `results/tanh_linearization/`.
 
 ## Fair comparisons
 
-For each pair of runs, keep architecture, optimizer, training steps, temporal split, seed, and generated dataset identical. Use at least three seeds for final results. The final test region must not be used to select hyperparameters.
+Keep architecture, optimizer, training steps, temporal split, seed, and generated dataset identical within each comparison. Change one run control at a time, use at least three seeds for final results, and do not use the final test region to select hyperparameters.
 
-A positive `NUM_DATA_POINTS` adds a supervised interior-data loss. Zero still uses the initial and boundary conditions required to define the PDE problem; “physics-only” here means no interior solution observations.
+A positive `NUM_DATA_POINTS` adds supervised interior-data loss. Zero still uses the initial and boundary conditions required to define the PDE problem; “physics-only” means no interior solution observations.
