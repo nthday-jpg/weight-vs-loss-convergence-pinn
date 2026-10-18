@@ -1,6 +1,6 @@
 # Experiment notebooks
 
-The notebook directory has two distinct entry points. The Navier–Stokes studies share one configurable training notebook; the tanh-linearization study is a separate local diagnostic.
+The notebook directory has four distinct entry points. The Navier–Stokes studies share one configurable training notebook; the other notebooks are standalone local diagnostics.
 
 ## Notebooks
 
@@ -15,6 +15,23 @@ Runs one Navier–Stokes configuration and one W&B run at a time. Use the **Run 
 - **Data-only baseline:** set `RUN_KIND = 'data_only'` to train on every interior point in the training grid without separate initial-condition, boundary-condition, or PDE-residual losses.
 
 All supervised observations exclude initial-time and spatial-boundary points. Validation and test labels remain held out.
+
+### `softadapt_simple_pde.ipynb`
+
+A standalone, pre-run SoftAdapt diagnostic with no W&B usage:
+
+- Solves the 1-D Poisson problem $u''=-\pi^2\sin(\pi x)$ with homogeneous Dirichlet conditions.
+- Tracks interval losses, raw and weighted component-gradient norms, normalized SoftAdapt scores, and selected weights.
+- Writes local CSV and plot artifacts to `results/softadapt_simple_pde/` when run.
+
+### `softadapt_compressible_navier_stokes_1d.ipynb`
+
+A standalone, pre-run SoftAdapt diagnostic with no W&B usage:
+
+- Runs locally or as an imported Kaggle notebook; on Kaggle it clones the repository and generates the smooth reference dataset when needed.
+- Trains the repository's periodic 1-D compressible Navier–Stokes PINN on initial-condition, boundary-condition, and conservation-residual losses.
+- Tracks interval losses, raw and weighted gradient norms, normalized SoftAdapt scores, selected weights, and held-out relative errors.
+- Writes local CSV and plot artifacts to `results/softadapt_compressible_ns/` when run. Kaggle requires Internet access for the initial clone but needs no secrets or W&B account.
 
 ### `tanh_linearization_hypothesis.ipynb`
 
