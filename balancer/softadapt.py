@@ -15,16 +15,20 @@ class SoftAdaptBalancer(BaseBalancer):
         history_length: int = 5,
         normalized: bool = False,
         loss_weighted: bool = False,
+        weight_ema: float = 0.0,
         epsilon: float = 1e-8,
     ):
         super().__init__()
         if history_length < 2:
             raise ValueError("SoftAdapt history_length must be at least 2.")
+        if not 0.0 <= weight_ema < 1.0:
+            raise ValueError("SoftAdapt weight_ema must be in [0, 1).")
 
         self.beta = beta
         self.history_length = history_length
         self.normalized = normalized
         self.loss_weighted = loss_weighted
+        self.weight_ema = weight_ema
         self.epsilon = epsilon
         self.weights = {}
         self.history = {}
@@ -91,6 +95,13 @@ class SoftAdaptBalancer(BaseBalancer):
             }
             denominator = sum(weighted.values()) + self.epsilon
             weights = {name: value / denominator for name, value in weighted.items()}
+
+        if self.weight_ema > 0.0:
+            weights = {
+                name: self.weight_ema * self.weights.get(name, value)
+                + (1.0 - self.weight_ema) * value
+                for name, value in weights.items()
+            }
 
         self.weights = weights
 

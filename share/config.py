@@ -30,12 +30,14 @@ class Config:
     loss_terms: list[str] | None = None
 
     # beta=0 gives fixed uniform weights; beta>0 enables adaptation.
+    # weight_ema in [0, 1) smooths weight updates toward the previous weights.
     softadapt_params: dict = field(
         default_factory=lambda: {
             "beta": 0.1,
             "history_length": 5,
             "normalized": False,
             "loss_weighted": False,
+            "weight_ema": 0.0,
         }
     )
 
