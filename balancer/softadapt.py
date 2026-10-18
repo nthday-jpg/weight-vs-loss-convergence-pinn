@@ -29,13 +29,12 @@ class SoftAdaptBalancer(BaseBalancer):
         self.weights = {}
         self.history = {}
 
-        # Weights for the derivative at the newest point of an equally spaced
-        # interpolation polynomial. This is an (n - 1)-order finite difference.
-        points = np.arange(-(history_length - 1), 1, dtype=np.float64)
-        vandermonde = np.vstack([points**order for order in range(history_length)])
-        derivative = np.zeros(history_length, dtype=np.float64)
-        derivative[1] = 1.0
-        self._slope_weights = np.linalg.solve(vandermonde, derivative)
+        # Least-squares slope weights: slope = w . history is the slope of the
+        # best-fit line through the equally spaced loss history. Centering makes
+        # the estimator well-conditioned, unlike a high-order finite difference.
+        points = np.arange(history_length, dtype=np.float64)
+        centered = points - points.mean()
+        self._slope_weights = centered / np.dot(centered, centered)
 
     @staticmethod
     def _current_losses(loss_dict):
