@@ -212,119 +212,132 @@ class Trainer:
             torch.cuda.synchronize(device)
         optimization_start = time.perf_counter()
 
-        for optimizer_step in progress:
-            should_log = (
-                optimizer_step % self.config.log_every_steps == 0
-                or optimizer_step == self.config.num_steps
-            )
-            batch = self.sample_batch(device)
-            self.optimizer.zero_grad(set_to_none=True)
-            losses = self.model(
-                batch, self.ics, self.bcs, self.data, loss_names=loss_names
-            )
-            total_loss = self.balancer(losses)
-            gradient_metrics = {}
-            if should_log and self.config.track_gradient_metrics:
-                gradient_metrics = component_gradient_metrics(
-                    losses, self.model.parameters(), self.balancer.weights
+        try:
+            for optimizer_step in progress:
+                should_log = (
+                    optimizer_step % self.config.log_every_steps == 0
+                    or optimizer_step == self.config.num_steps
                 )
-            accelerator.backward(total_loss)
-            self.optimizer.step()
-
-            totals["total"] += total_loss.detach()
-            for name in loss_names:
-                totals[name] += losses[f"{name}_loss"].detach()
-            interval_step += 1
-
-            should_adapt = (
-                optimizer_step % self.config.adapt_every_steps == 0
-                or optimizer_step == self.config.num_steps
-            )
-
-            if should_log:
-                if device.type == "cuda":
-                    torch.cuda.synchronize(device)
-                optimization_time += time.perf_counter() - optimization_start
-                averages = {
-                    name: accelerator.reduce(value, reduction="mean").item()
-                    / interval_step
-                    for name, value in totals.items()
-                }
-                gradient_metrics = {
-                    name: accelerator.reduce(value, reduction="mean").item()
-                    for name, value in gradient_metrics.items()
-                }
-                validation_metrics = self.evaluate(split="validation")
-                wall_time = time.perf_counter() - wall_start
-                record = {
-                    "optimizer_step": optimizer_step,
-                    "optimization_time_seconds": optimization_time,
-                    "wall_time_seconds": wall_time,
-                    **{f"{name}_loss": averages[name] for name in loss_names},
-                    **gradient_metrics,
-                    **validation_metrics,
-                    **{
-                        f"{name}_weight": value
-                        for name, value in self.balancer.weights.items()
-                    },
-                }
-                if accelerator.is_main_process:
-                    history.append(record)
-                    progress.set_postfix(
-                        {
-                            "loss": f"{averages['total']:.3e}",
-                            "interp": f"{validation_metrics['validation_interpolation_relative_l2']:.3e}",
-                            "extra": f"{validation_metrics['validation_extrapolation_relative_l2']:.3e}",
-                        }
+                batch = self.sample_batch(device)
+                self.optimizer.zero_grad(set_to_none=True)
+                losses = self.model(
+                    batch, self.ics, self.bcs, self.data, loss_names=loss_names
+                )
+                total_loss = self.balancer(losses)
+                gradient_metrics = {}
+                if should_log and self.config.track_gradient_metrics:
+                    gradient_metrics = component_gradient_metrics(
+                        losses, self.model.parameters(), self.balancer.weights
                     )
-                    accelerator.log(
-                        {
-                            "train/total_loss": averages["total"],
-                            **{
-                                f"train/{name}_loss": averages[name]
-                                for name in loss_names
-                            },
-                            **{
-                                f"weights/{name}": value
-                                for name, value in self.balancer.weights.items()
-                            },
-                            **{
-                                f"gradient_diagnostics/{name}": value
-                                for name, value in gradient_metrics.items()
-                            },
-                            "validation/interpolation_relative_l2": validation_metrics[
-                                "validation_interpolation_relative_l2"
-                            ],
-                            "validation/extrapolation_relative_l2": validation_metrics[
-                                "validation_extrapolation_relative_l2"
-                            ],
-                        },
-                        step=optimizer_step,
-                    )
-                self.model.train()
-                optimization_start = time.perf_counter()
+                accelerator.backward(total_loss)
+                self.optimizer.step()
 
-            if should_adapt:
-                if not should_log:
+                totals["total"] += total_loss.detach()
+                for name in loss_names:
+                    totals[name] += losses[f"{name}_loss"].detach()
+                interval_step += 1
+
+                should_adapt = (
+                    optimizer_step % self.config.adapt_every_steps == 0
+                    or optimizer_step == self.config.num_steps
+                )
+
+                if should_log:
                     if device.type == "cuda":
                         torch.cuda.synchronize(device)
                     optimization_time += time.perf_counter() - optimization_start
-                interval_averages = {
-                    name: accelerator.reduce(value, reduction="mean").item()
-                    / interval_step
-                    for name, value in totals.items()
-                }
-                adaptation_start = time.perf_counter()
-                self.balancer.update(
-                    {f"{name}_loss": interval_averages[name] for name in loss_names}
+                    averages = {
+                        name: accelerator.reduce(value, reduction="mean").item()
+                        / interval_step
+                        for name, value in totals.items()
+                    }
+                    gradient_metrics = {
+                        name: accelerator.reduce(value, reduction="mean").item()
+                        for name, value in gradient_metrics.items()
+                    }
+                    validation_metrics = self.evaluate(split="validation")
+                    wall_time = time.perf_counter() - wall_start
+                    record = {
+                        "optimizer_step": optimizer_step,
+                        "optimization_time_seconds": optimization_time,
+                        "wall_time_seconds": wall_time,
+                        **{f"{name}_loss": averages[name] for name in loss_names},
+                        **gradient_metrics,
+                        **validation_metrics,
+                        **{
+                            f"{name}_weight": value
+                            for name, value in self.balancer.weights.items()
+                        },
+                    }
+                    if accelerator.is_main_process:
+                        history.append(record)
+                        progress.set_postfix(
+                            {
+                                "loss": f"{averages['total']:.3e}",
+                                "interp": f"{validation_metrics['validation_interpolation_relative_l2']:.3e}",
+                                "extra": f"{validation_metrics['validation_extrapolation_relative_l2']:.3e}",
+                            }
+                        )
+                        accelerator.log(
+                            {
+                                "train/total_loss": averages["total"],
+                                **{
+                                    f"train/{name}_loss": averages[name]
+                                    for name in loss_names
+                                },
+                                **{
+                                    f"weights/{name}": value
+                                    for name, value in self.balancer.weights.items()
+                                },
+                                **{
+                                    f"gradient_diagnostics/{name}": value
+                                    for name, value in gradient_metrics.items()
+                                },
+                                "validation/interpolation_relative_l2": validation_metrics[
+                                    "validation_interpolation_relative_l2"
+                                ],
+                                "validation/extrapolation_relative_l2": validation_metrics[
+                                    "validation_extrapolation_relative_l2"
+                                ],
+                            },
+                            step=optimizer_step,
+                        )
+                    self.model.train()
+                    optimization_start = time.perf_counter()
+
+                if should_adapt:
+                    if not should_log:
+                        if device.type == "cuda":
+                            torch.cuda.synchronize(device)
+                        optimization_time += time.perf_counter() - optimization_start
+                    interval_averages = {
+                        name: accelerator.reduce(value, reduction="mean").item()
+                        / interval_step
+                        for name, value in totals.items()
+                    }
+                    adaptation_start = time.perf_counter()
+                    self.balancer.update(
+                        {f"{name}_loss": interval_averages[name] for name in loss_names}
+                    )
+                    optimization_time += time.perf_counter() - adaptation_start
+                    totals = {
+                        name: torch.zeros((), device=device)
+                        for name in ["total", *loss_names]
+                    }
+                    interval_step = 0
+                    optimization_start = time.perf_counter()
+        except KeyboardInterrupt:
+            self.model = accelerator.unwrap_model(self.model)
+            metrics = self.evaluate(split="test")
+            if accelerator.is_main_process:
+                progress.close()
+                plot_path = self.plot_results()
+                print(
+                    "\nTraining interrupted - final evaluation saved: "
+                    f"{plot_path}"
                 )
-                optimization_time += time.perf_counter() - adaptation_start
-                totals = {
-                    name: torch.zeros((), device=device)
-                    for name in ["total", *loss_names]
-                }
-                interval_step = 0
-                optimization_start = time.perf_counter()
+            accelerator.end_training()
+            return metrics
 
         self.model = accelerator.unwrap_model(self.model)
         metrics = self.evaluate(split="test")

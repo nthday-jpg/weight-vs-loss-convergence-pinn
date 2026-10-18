@@ -23,5 +23,7 @@ results/
 wandb/
 *.wandb
 
+.omo/
+
 # Jupyter notebooks
 .ipynb_checkpoints/
