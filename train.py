@@ -31,9 +31,13 @@ def _load_trainer_class(problem: str):
     elif normalized == "navier_stokes":
         trainer_file = root / "navier-stokes" / "trainer.py"
         module_name = "navier_stokes_trainer_module"
+    elif normalized == "helmholtz":
+        trainer_file = root / "helmholtz" / "trainer.py"
+        module_name = "helmholtz_trainer_module"
     else:
         raise ValueError(
-            f"Unsupported problem '{problem}'. Use 'burgers' or 'navier_stokes'."
+            f"Unsupported problem '{problem}'. "
+            "Use 'burgers', 'navier_stokes', or 'helmholtz'."
         )
 
     trainer_dir = str(trainer_file.parent)

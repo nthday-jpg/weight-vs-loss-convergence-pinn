@@ -7,9 +7,13 @@ from accelerate import Accelerator
 from accelerate.utils import set_seed
 from tqdm import tqdm
 
-from balancer import SoftAdaptBalancer
+from balancer import build_balancer
 from model import BurgersPINN
-from share.gradient_metrics import component_gradient_metrics
+from share.gradient_metrics import (
+    component_gradient_metrics,
+    component_gradient_statistics,
+    component_gradient_summary,
+)
 from utils import load_burgers_data, plot_comparison
 
 
@@ -32,7 +36,7 @@ class Trainer:
         self.optimizer = torch.optim.Adam(
             self.model.parameters(), lr=config.learning_rate
         )
-        self.balancer = SoftAdaptBalancer(**config.softadapt_params)
+        self.balancer = build_balancer(config)
 
         if not 0.0 < config.train_time_fraction < config.validation_time_fraction < 1.0:
             raise ValueError(
@@ -81,6 +85,13 @@ class Trainer:
                 raise ValueError("loss_terms must contain at least one loss term")
             if "data" in self.loss_names and self.data is None:
                 raise ValueError("The data loss requires num_data_points > 0")
+
+        reference = getattr(self.balancer, "reference", None)
+        if reference is not None and reference not in self.loss_names:
+            raise ValueError(
+                f"Balancer {self.config.balancer!r} requires the {reference!r} "
+                "loss term."
+            )
 
     def _sample_interior_data(self, count):
         if count == 0:
@@ -181,14 +192,37 @@ class Trainer:
                 optimizer_step % self.config.log_every_steps == 0
                 or optimizer_step == self.config.num_steps
             )
+            should_adapt = (
+                optimizer_step % self.config.adapt_every_steps == 0
+                or optimizer_step == self.config.num_steps
+            )
+            needs_gradient_statistics = (
+                should_adapt and self.balancer.requires_gradients
+            )
+            needs_gradient_metrics = (
+                should_log and self.config.track_gradient_metrics
+            )
             batch = self.sample_batch(device)
             self.optimizer.zero_grad(set_to_none=True)
             losses = self.model(
                 batch, self.ics, self.bcs, self.data, loss_names=loss_names
             )
             total_loss = self.balancer(losses)
+            # Gradient statistics must be taken before the optimizer step,
+            # while the autograd graph still matches the current parameters.
             gradient_metrics = {}
-            if should_log and self.config.track_gradient_metrics:
+            gradient_statistics = None
+            if needs_gradient_statistics:
+                if needs_gradient_metrics:
+                    gradient_metrics, gradient_statistics = component_gradient_summary(
+                        losses, self.model.parameters(), self.balancer.weights
+                    )
+                else:
+                    gradient_statistics = component_gradient_statistics(
+                        losses, self.model.parameters()
+                    )
+                gradient_statistics = gradient_statistics.reduced(accelerator)
+            elif needs_gradient_metrics:
                 gradient_metrics = component_gradient_metrics(
                     losses, self.model.parameters(), self.balancer.weights
                 )
@@ -199,11 +233,6 @@ class Trainer:
             for name in loss_names:
                 totals[name] += losses[f"{name}_loss"].detach()
             interval_step += 1
-
-            should_adapt = (
-                optimizer_step % self.config.adapt_every_steps == 0
-                or optimizer_step == self.config.num_steps
-            )
 
             if should_log:
                 if device.type == "cuda":
@@ -267,7 +296,9 @@ class Trainer:
                 }
                 adaptation_start = time.perf_counter()
                 self.balancer.update(
-                    {f"{name}_loss": interval_averages[name] for name in loss_names}
+                    {f"{name}_loss": interval_averages[name] for name in loss_names},
+                    gradients=gradient_statistics,
+                    step=optimizer_step,
                 )
                 optimization_time += time.perf_counter() - adaptation_start
                 totals = {

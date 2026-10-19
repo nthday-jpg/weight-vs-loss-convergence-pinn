@@ -1,6 +1,9 @@
 from abc import ABC, abstractmethod
 
 class BaseBalancer(ABC):
+    # True when update() needs per-term gradient statistics, not just losses.
+    requires_gradients = False
+
     def __init__(self):
         self.weights = {}
 
@@ -9,6 +12,13 @@ class BaseBalancer(ABC):
         """Compute the weighted optimizer loss without changing weights."""
         pass
 
-    def update(self, loss_dict):
-        """Update state from aggregated losses; fixed balancers do nothing."""
+    def update(self, loss_dict, *, gradients=None, step=None):
+        """Update state after one adaptation interval.
+
+        args:
+            loss_dict: detached interval-mean scalars keyed "<term>_loss".
+            gradients: GradientStats, present only when requires_gradients is
+                True.
+            step: optimizer step at the end of the interval.
+        """
         return None

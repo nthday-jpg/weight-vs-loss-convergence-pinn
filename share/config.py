@@ -41,5 +41,18 @@ class Config:
         }
     )
 
+    # Loss-weighting policy: "softadapt" or "gradient_annealing".
+    balancer: str = "softadapt"
+
+    # alpha is the EMA rate for the ratio max|grad L_ref| / mean|grad L_i|.
+    # The reference term (PDE residual) keeps a fixed weight of 1.
+    gradient_annealing_params: dict = field(
+        default_factory=lambda: {
+            "alpha": 0.1,
+            "reference": "res",
+            "initial_weight": 1.0,
+        }
+    )
+
     wandb_project: str = "loss-weight-convergence"
     wandb_run_name: str | None = None

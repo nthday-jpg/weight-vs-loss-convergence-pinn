@@ -113,7 +113,7 @@ class SoftAdaptBalancer(BaseBalancer):
             for name in self.weights
         )
 
-    def update(self, loss_dict):
+    def update(self, loss_dict, *, gradients=None, step=None):
         """Update once from losses averaged over an adaptation interval."""
         current = self._current_losses(loss_dict)
         self._record(current)
