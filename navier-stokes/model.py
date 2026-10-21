@@ -101,8 +101,8 @@ class NavierStokesPINN(nn.Module):
         ) / 3.0
         return 0.5 * (value_loss + derivative_loss)
 
-    def forward(self, batch, ics, bcs, data=None, loss_names=None):
-        requested = set(loss_names or ("ics", "bcs", "res", "data"))
+    def forward(self, batch, ics, bcs, loss_names=None):
+        requested = set(loss_names or ("ics", "bcs", "res"))
         losses = {}
         if "ics" in requested:
             losses["ics_loss"] = self._primitive_mse(
@@ -118,12 +118,8 @@ class NavierStokesPINN(nn.Module):
             losses["res_loss"] = (
                 sum(torch.mean(residual.square()) for residual in residuals) / 3.0
             )
-        if "data" in requested and data is not None:
-            losses["data_loss"] = self._primitive_mse(
-                data, self.u_net(data["t"], data["x"])
-            )
         return losses
 
-    def compute_loss(self, batch, ics, bcs, data=None, loss_names=None):
+    def compute_loss(self, batch, ics, bcs, loss_names=None):
         """Backward-compatible alias for direct, non-distributed use."""
-        return self.forward(batch, ics, bcs, data, loss_names)
+        return self.forward(batch, ics, bcs, loss_names)

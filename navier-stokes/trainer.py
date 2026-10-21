@@ -105,21 +105,15 @@ class Trainer:
             "x_left": torch.full((nt,), self.x_start),
             "x_right": torch.full((nt,), self.x_end),
         }
-        self.data = self._sample_interior_data(config.num_data_points)
-        available_loss_names = ["ics", "bcs", "res"]
-        if self.data is not None:
-            available_loss_names.append("data")
         if config.loss_terms is None:
-            self.loss_names = available_loss_names
+            self.loss_names = ["ics", "bcs", "res"]
         else:
             self.loss_names = list(dict.fromkeys(config.loss_terms))
-            unknown = set(self.loss_names) - {"ics", "bcs", "res", "data"}
+            unknown = set(self.loss_names) - {"ics", "bcs", "res"}
             if unknown:
                 raise ValueError(f"Unknown loss terms: {sorted(unknown)}")
             if not self.loss_names:
                 raise ValueError("loss_terms must contain at least one loss term")
-            if "data" in self.loss_names and self.data is None:
-                raise ValueError("The data loss requires num_data_points > 0")
 
         reference = getattr(self.balancer, "reference", None)
         if reference is not None and reference not in self.loss_names:
@@ -127,41 +121,6 @@ class Trainer:
                 f"Balancer {self.config.balancer!r} requires the {reference!r} "
                 "loss term."
             )
-
-    def _sample_interior_data(self, count):
-        if count == 0:
-            return None
-        if count != "all" and (not isinstance(count, int) or count < 0):
-            raise ValueError('num_data_points must be zero, a positive integer, or "all"')
-
-        # Data observations must not duplicate the initial or boundary losses.
-        time_indices = torch.where(
-            (self.dataset["t"] > 0) & (self.dataset["t"] <= self.train_t_end)
-        )[0]
-        spatial_indices = torch.where(
-            (self.dataset["x"] > self.x_start)
-            & (self.dataset["x"] < self.x_end)
-        )[0]
-
-        candidate_count = len(time_indices) * len(spatial_indices)
-        if count == "all":
-            flat_indices = torch.arange(candidate_count)
-        else:
-            if count > candidate_count:
-                raise ValueError(
-                    f"Requested {count} data points, but only {candidate_count} are available."
-                )
-            generator = torch.Generator().manual_seed(self.config.seed)
-            flat_indices = torch.randperm(candidate_count, generator=generator)[:count]
-        selected_t = time_indices[flat_indices // len(spatial_indices)]
-        selected_x = spatial_indices[flat_indices % len(spatial_indices)]
-        return {
-            "t": self.dataset["t"][selected_t],
-            "x": self.dataset["x"][selected_x],
-            "rho": self.dataset["rho"][selected_t, selected_x],
-            "u": self.dataset["u"][selected_t, selected_x],
-            "p": self.dataset["p"][selected_t, selected_x],
-        }
 
     def sample_batch(self, device):
         return {
@@ -177,8 +136,6 @@ class Trainer:
         self.model, self.optimizer = accelerator.prepare(self.model, self.optimizer)
         self.ics = {key: value.to(device) for key, value in self.ics.items()}
         self.bcs = {key: value.to(device) for key, value in self.bcs.items()}
-        if self.data is not None:
-            self.data = {key: value.to(device) for key, value in self.data.items()}
 
         init_kwargs = {}
         if self.config.wandb_run_name:
@@ -237,27 +194,31 @@ class Trainer:
                 needs_gradient_statistics = (
                     should_adapt and self.balancer.requires_gradients
                 )
-                needs_gradient_metrics = (
-                    should_log and self.config.track_gradient_metrics
-                )
+                # Gradient diagnostics are always tracked so the W&B run
+                # records norms, cosine similarities, and histograms.
+                needs_gradient_metrics = should_log
                 batch = self.sample_batch(device)
                 self.optimizer.zero_grad(set_to_none=True)
                 losses = self.model(
-                    batch, self.ics, self.bcs, self.data, loss_names=loss_names
+                    batch, self.ics, self.bcs, loss_names=loss_names
                 )
                 total_loss = self.balancer(losses)
                 # Gradient statistics must be taken before the optimizer step,
                 # while the autograd graph still matches the current parameters.
                 gradient_metrics = {}
+                gradient_histograms = {}
                 gradient_statistics = None
                 if needs_gradient_statistics:
                     if needs_gradient_metrics:
-                        gradient_metrics, gradient_statistics = (
-                            component_gradient_summary(
-                                losses,
-                                self.model.parameters(),
-                                self.balancer.weights,
-                            )
+                        (
+                            gradient_metrics,
+                            gradient_statistics,
+                            gradient_histograms,
+                        ) = component_gradient_summary(
+                            losses,
+                            self.model.parameters(),
+                            self.balancer.weights,
+                            return_histograms=True,
                         )
                     else:
                         gradient_statistics = component_gradient_statistics(
@@ -265,8 +226,11 @@ class Trainer:
                         )
                     gradient_statistics = gradient_statistics.reduced(accelerator)
                 elif needs_gradient_metrics:
-                    gradient_metrics = component_gradient_metrics(
-                        losses, self.model.parameters(), self.balancer.weights
+                    gradient_metrics, gradient_histograms = component_gradient_metrics(
+                        losses,
+                        self.model.parameters(),
+                        self.balancer.weights,
+                        return_histograms=True,
                     )
                 accelerator.backward(total_loss)
                 self.optimizer.step()
@@ -326,6 +290,14 @@ class Trainer:
                                 **{
                                     f"gradient_diagnostics/{name}": value
                                     for name, value in gradient_metrics.items()
+                                },
+                                **{
+                                    f"gradient_diagnostics/{name}_gradient_histogram": (
+                                        wandb.Histogram(
+                                            values.float().cpu().numpy(), num_bins=64
+                                        )
+                                    )
+                                    for name, values in gradient_histograms.items()
                                 },
                                 "validation/interpolation_relative_l2": validation_metrics[
                                     "validation_interpolation_relative_l2"
@@ -688,6 +660,18 @@ class Trainer:
                     )
                 )
         run.log(artifacts)
+        # Keep the run summary to scalar metrics. Tables logged with the charts
+        # are stored in the history but do not need summary entries.
+        for key in (
+            "gradient_diagnostics/gradient_cosines_vs_steps_table",
+            "gradient_diagnostics/gradient_norms_vs_steps_table",
+            "tables/convergence_history",
+            "tables/test_metrics",
+        ):
+            del run.summary[key]
+        for key in list(run.summary.keys()):
+            if key == "progress" or key.startswith("progress/"):
+                del run.summary[key]
 
     def plot_results(self):
         """Save ground truth, prediction, and absolute error for each field."""

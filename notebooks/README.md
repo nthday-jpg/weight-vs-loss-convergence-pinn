@@ -6,15 +6,12 @@ The notebook directory has four distinct entry points. The Navier–Stokes studi
 
 ### `navier_stokes_experiments.ipynb`
 
-Runs one Navier–Stokes configuration and one W&B run at a time. Use the **Run controls** cell to reproduce all of the related studies:
+Runs one physics-only Navier–Stokes configuration and one W&B run at a time on the shock-forming case. The PINN uses initial-condition, periodic boundary-condition, and PDE-residual losses only; no interior solution observations are used for training. Use the **Run controls** cell to reproduce the related studies:
 
 - **Loss weighting:** compare `SOFTADAPT_BETA = 0.0` (uniform weights) with a positive beta using matched seeds.
-- **Flow difficulty:** compare `FLOW_CASE = 'smooth'`, `'steep'`, and `'shock'`.
-- **Data ablation:** compare `NUM_DATA_POINTS = 0` with a fixed positive count.
-- **Gradient diagnostics:** set `TRACK_GRADIENT_METRICS = True` to track raw and weighted component-gradient norms and pairwise cosine similarities.
-- **Data-only baseline:** set `RUN_KIND = 'data_only'` to train on every interior point in the training grid without separate initial-condition, boundary-condition, or PDE-residual losses.
+- **Gradient diagnostics:** raw and weighted component-gradient norms, pairwise cosine similarities, and per-loss parameter-gradient histograms are always tracked.
 
-All supervised observations exclude initial-time and spatial-boundary points. Validation and test labels remain held out.
+Validation and test labels remain held out.
 
 ### `softadapt_simple_pde.ipynb`
 
@@ -28,7 +25,7 @@ A standalone, pre-run SoftAdapt diagnostic with no W&B usage:
 
 A standalone, pre-run SoftAdapt diagnostic with no W&B usage:
 
-- Runs locally or as an imported Kaggle notebook; on Kaggle it clones the repository and generates the smooth reference dataset when needed.
+- Runs locally or as an imported Kaggle notebook; on Kaggle it clones the repository and generates the shock reference dataset when needed.
 - Trains the repository's periodic 1-D compressible Navier–Stokes PINN on initial-condition, boundary-condition, and conservation-residual losses.
 - Tracks interval losses, raw and weighted gradient norms, normalized SoftAdapt scores, selected weights, and held-out relative errors.
 - Writes local CSV and plot artifacts to `results/softadapt_compressible_ns/` when run. Kaggle requires Internet access for the initial clone but needs no secrets or W&B account.
@@ -46,4 +43,4 @@ A standalone local diagnostic that does not use W&B:
 
 Keep architecture, optimizer, training steps, temporal split, seed, and generated dataset identical within each comparison. Change one run control at a time, use at least three seeds for final results, and do not use the final test region to select hyperparameters.
 
-A positive `NUM_DATA_POINTS` adds supervised interior-data loss. Zero still uses the initial and boundary conditions required to define the PDE problem; “physics-only” means no interior solution observations.
+“Physics-only” means no interior solution observations; the initial and periodic boundary conditions are still required to define the PDE problem.

@@ -78,6 +78,16 @@ def _gradient_metrics(loss_dict, names, gradients, norms, weights, epsilon):
     return metrics
 
 
+def _flatten_gradients(gradients):
+    """Concatenate each term's parameter gradients into one flat tensor."""
+    flattened = {}
+    for name, values in gradients.items():
+        available = [gradient.reshape(-1) for gradient in values if gradient is not None]
+        if available:
+            flattened[name] = torch.cat(available)
+    return flattened
+
+
 def _gradient_statistics(names, gradients):
     max_abs = {}
     mean_abs = {}
@@ -95,14 +105,21 @@ def _gradient_statistics(names, gradients):
     return GradientStats(max_abs=max_abs, mean_abs=mean_abs)
 
 
-def component_gradient_metrics(loss_dict, parameters, weights, epsilon=1e-12):
+def component_gradient_metrics(
+    loss_dict, parameters, weights, epsilon=1e-12, return_histograms=False
+):
     """Return raw/weighted gradient norms and pairwise cosine similarities.
 
     Metrics are computed before the optimizer backward pass. The graph is
     retained so the caller can subsequently backpropagate the balanced loss.
+    With ``return_histograms=True``, also return each term's flattened
+    parameter gradients for distribution logging.
     """
     names, gradients, norms = _component_gradients(loss_dict, parameters)
-    return _gradient_metrics(loss_dict, names, gradients, norms, weights, epsilon)
+    metrics = _gradient_metrics(loss_dict, names, gradients, norms, weights, epsilon)
+    if return_histograms:
+        return metrics, _flatten_gradients(gradients)
+    return metrics
 
 
 def component_gradient_statistics(loss_dict, parameters):
@@ -111,9 +128,13 @@ def component_gradient_statistics(loss_dict, parameters):
     return _gradient_statistics(names, gradients)
 
 
-def component_gradient_summary(loss_dict, parameters, weights, epsilon=1e-12):
+def component_gradient_summary(
+    loss_dict, parameters, weights, epsilon=1e-12, return_histograms=False
+):
     """Return diagnostics and gradient statistics from a single autograd pass."""
     names, gradients, norms = _component_gradients(loss_dict, parameters)
     metrics = _gradient_metrics(loss_dict, names, gradients, norms, weights, epsilon)
     statistics = _gradient_statistics(names, gradients)
+    if return_histograms:
+        return metrics, statistics, _flatten_gradients(gradients)
     return metrics, statistics
