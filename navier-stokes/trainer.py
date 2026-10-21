@@ -145,6 +145,11 @@ class Trainer:
             config=asdict(self.config),
             init_kwargs=init_kwargs,
         )
+        if accelerator.is_main_process:
+            # Keep everything in run history/plots only; do not populate the
+            # run summary with tables, charts, or scalar metrics.
+            run = accelerator.get_tracker("wandb", unwrap=True)
+            run.define_metric("*", summary="none")
 
         # Keep identical initial parameters but sample different collocation
         # points on each distributed worker.
@@ -660,18 +665,6 @@ class Trainer:
                     )
                 )
         run.log(artifacts)
-        # Keep the run summary to scalar metrics. Tables logged with the charts
-        # are stored in the history but do not need summary entries.
-        for key in (
-            "gradient/gradient_cosines_vs_steps_table",
-            "gradient/gradient_norms_vs_steps_table",
-            "tables/convergence_history",
-            "tables/test_metrics",
-        ):
-            del run.summary[key]
-        for key in list(run.summary.keys()):
-            if key == "progress" or key.startswith("progress/"):
-                del run.summary[key]
 
     def plot_results(self):
         """Save ground truth, prediction, and absolute error for each field."""

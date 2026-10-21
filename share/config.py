@@ -51,6 +51,7 @@ class Config:
             "alpha": 0.1,
             "reference": "res",
             "initial_weight": 1.0,
+            "epsilon": 1e-8,
         }
     )
 

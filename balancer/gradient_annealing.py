@@ -29,7 +29,7 @@ class GradientAnnealingBalancer(BaseBalancer):
         alpha: float = 0.1,
         reference: str = "res",
         initial_weight: float = 1.0,
-        epsilon: float = 1e-12,
+        epsilon: float = 1e-8,
     ):
         super().__init__()
         if not 0.0 < alpha <= 1.0:
