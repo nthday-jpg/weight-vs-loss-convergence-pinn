@@ -288,11 +288,11 @@ class Trainer:
                                     for name, value in self.balancer.weights.items()
                                 },
                                 **{
-                                    f"gradient_diagnostics/{name}": value
+                                    f"gradient/{name}": value
                                     for name, value in gradient_metrics.items()
                                 },
                                 **{
-                                    f"gradient_diagnostics/{name}_gradient_histogram": (
+                                    f"gradient/{name}_gradient_histogram": (
                                         wandb.Histogram(
                                             values.float().cpu().numpy(), num_bins=64
                                         )
@@ -650,7 +650,7 @@ class Trainer:
             ("gradient_cosines", cosine_keys, "Pairwise gradient cosine similarities"),
         ):
             if keys:
-                artifacts[f"gradient_diagnostics/{artifact_name}_vs_steps"] = (
+                artifacts[f"gradient/{artifact_name}_vs_steps"] = (
                     wandb.plot.line_series(
                         xs=steps,
                         ys=[[row[key] for row in history] for key in keys],
@@ -663,8 +663,8 @@ class Trainer:
         # Keep the run summary to scalar metrics. Tables logged with the charts
         # are stored in the history but do not need summary entries.
         for key in (
-            "gradient_diagnostics/gradient_cosines_vs_steps_table",
-            "gradient_diagnostics/gradient_norms_vs_steps_table",
+            "gradient/gradient_cosines_vs_steps_table",
+            "gradient/gradient_norms_vs_steps_table",
             "tables/convergence_history",
             "tables/test_metrics",
         ):
