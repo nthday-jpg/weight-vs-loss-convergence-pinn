@@ -52,6 +52,7 @@ class Config:
             "reference": "res",
             "initial_weight": 1.0,
             "epsilon": 1e-8,
+            "max_weight": 1000.0,
         }
     )
 
