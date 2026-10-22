@@ -78,13 +78,13 @@ def _gradient_metrics(loss_dict, names, gradients, norms, weights, epsilon):
     return metrics
 
 
-def _flatten_gradients(gradients):
-    """Concatenate each term's parameter gradients into one flat tensor."""
+def _flatten_gradients(gradients, weights):
+    """Concatenate each term's weighted parameter gradients into one flat tensor."""
     flattened = {}
     for name, values in gradients.items():
         available = [gradient.reshape(-1) for gradient in values if gradient is not None]
         if available:
-            flattened[name] = torch.cat(available)
+            flattened[name] = torch.cat(available) * abs(weights[name])
     return flattened
 
 
@@ -113,12 +113,12 @@ def component_gradient_metrics(
     Metrics are computed before the optimizer backward pass. The graph is
     retained so the caller can subsequently backpropagate the balanced loss.
     With ``return_histograms=True``, also return each term's flattened
-    parameter gradients for distribution logging.
+    weighted parameter gradients for distribution logging.
     """
     names, gradients, norms = _component_gradients(loss_dict, parameters)
     metrics = _gradient_metrics(loss_dict, names, gradients, norms, weights, epsilon)
     if return_histograms:
-        return metrics, _flatten_gradients(gradients)
+        return metrics, _flatten_gradients(gradients, weights)
     return metrics
 
 
@@ -136,5 +136,5 @@ def component_gradient_summary(
     metrics = _gradient_metrics(loss_dict, names, gradients, norms, weights, epsilon)
     statistics = _gradient_statistics(names, gradients)
     if return_histograms:
-        return metrics, statistics, _flatten_gradients(gradients)
+        return metrics, statistics, _flatten_gradients(gradients, weights)
     return metrics, statistics

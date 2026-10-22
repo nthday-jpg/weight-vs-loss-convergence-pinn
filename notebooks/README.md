@@ -9,7 +9,7 @@ The notebook directory has four distinct entry points. The Navier–Stokes studi
 Runs one physics-only Navier–Stokes configuration and one W&B run at a time on the shock-forming case. The PINN uses initial-condition, periodic boundary-condition, and PDE-residual losses only; no interior solution observations are used for training. Use the **Run controls** cell to reproduce the related studies:
 
 - **Loss weighting:** compare `SOFTADAPT_BETA = 0.0` (uniform weights) with a positive beta using matched seeds.
-- **Gradient diagnostics:** raw and weighted component-gradient norms, pairwise cosine similarities, and per-loss parameter-gradient histograms are always tracked.
+- **Gradient diagnostics:** raw and weighted component-gradient norms, pairwise cosine similarities, and per-loss weighted parameter-gradient histograms are always tracked.
 
 Validation and test labels remain held out.
 
