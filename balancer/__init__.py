@@ -1,14 +1,14 @@
 from .base import BaseBalancer
-from .gradient_annealing import GradientAnnealingBalancer
-from .softadapt import SoftAdaptBalancer
+from .gradient_annealing import GradientAnnealing
+from .softadapt import SoftAdapt
 
 
 def build_balancer(config):
     """Instantiate the loss balancer selected by ``config.balancer``."""
     if config.balancer == "softadapt":
-        return SoftAdaptBalancer(**config.softadapt_params)
+        return SoftAdapt(**config.softadapt_params)
     if config.balancer == "gradient_annealing":
-        return GradientAnnealingBalancer(**config.gradient_annealing_params)
+        return GradientAnnealing(**config.gradient_annealing_params)
     raise ValueError(
         f"Unknown balancer {config.balancer!r}. "
         "Use 'softadapt' or 'gradient_annealing'."
@@ -17,7 +17,7 @@ def build_balancer(config):
 
 __all__ = [
     "BaseBalancer",
-    "SoftAdaptBalancer",
-    "GradientAnnealingBalancer",
+    "SoftAdapt",
+    "GradientAnnealing",
     "build_balancer",
 ]

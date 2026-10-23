@@ -7,7 +7,7 @@ gradient flow pathologies in physics-informed neural networks".
 from .base import BaseBalancer
 
 
-class GradientAnnealingBalancer(BaseBalancer):
+class GradientAnnealing(BaseBalancer):
     """Balance auxiliary losses against the PDE residual by gradient scale.
 
     The residual is the reference term and keeps weight 1. Every other term is
@@ -25,6 +25,8 @@ class GradientAnnealingBalancer(BaseBalancer):
     with R_i = max|grad L_res| / mean|grad L_i|. This converges to
     lambda_i = sqrt(R_i) instead of chasing R_i without bound.
     """
+
+    requires_gradients = True
 
     def __init__(
         self,
@@ -68,7 +70,7 @@ class GradientAnnealingBalancer(BaseBalancer):
     def update(self, loss_dict, *, gradients=None, step=None):
         if gradients is None:
             raise ValueError(
-                "GradientAnnealingBalancer.update requires gradient statistics."
+                "GradientAnnealing.update requires gradient statistics."
             )
         names = [key.removesuffix("_loss") for key in loss_dict]
         self._ensure_components(names)

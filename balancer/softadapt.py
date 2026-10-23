@@ -8,7 +8,7 @@ import numpy as np
 from .base import BaseBalancer
 
 
-class SoftAdaptBalancer(BaseBalancer):
+class SoftAdapt(BaseBalancer):
     def __init__(
         self,
         beta: float = 0.1,

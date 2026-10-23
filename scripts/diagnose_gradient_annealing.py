@@ -34,7 +34,7 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from balancer.gradient_annealing import GradientAnnealingBalancer  # noqa: E402
+from balancer.gradient_annealing import GradientAnnealing  # noqa: E402
 from share.gradient_metrics import component_gradient_statistics  # noqa: E402
 
 
@@ -323,7 +323,7 @@ def run(args):
             input_sigma=1.0 / math.sqrt(3.0),
         )
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate)
-    balancer = GradientAnnealingBalancer(
+    balancer = GradientAnnealing(
         alpha=args.alpha,
         reference=reference,
         initial_weight=args.initial_weight,
