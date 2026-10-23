@@ -44,7 +44,7 @@ class Config:
     # Loss-weighting policy: "softadapt" or "gradient_annealing".
     balancer: str = "softadapt"
 
-    # alpha is the EMA rate for the ratio max|grad L_ref| / mean|grad L_i|.
+    # alpha is the EMA rate for the ratio max|grad L_ref| / mean|grad (lambda_i L_i)|.
     # The reference term (PDE residual) keeps a fixed weight of 1.
     gradient_annealing_params: dict = field(
         default_factory=lambda: {
@@ -52,7 +52,6 @@ class Config:
             "reference": "res",
             "initial_weight": 1.0,
             "epsilon": 1e-8,
-            "max_weight": 1000.0,
         }
     )
 

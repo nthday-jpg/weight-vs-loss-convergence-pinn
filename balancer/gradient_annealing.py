@@ -13,19 +13,18 @@ class GradientAnnealingBalancer(BaseBalancer):
     The residual is the reference term and keeps weight 1. Every other term is
     driven toward
 
-        lambda_hat_i = max|grad L_res| / mean|grad L_i|
+        lambda_hat_i = max|grad L_res| / mean|grad (lambda_i * L_i)|
 
     where the max and mean are taken over individual elements of the flattened
-    gradient vector of all trainable parameters. Targets are smoothed with an
-    exponential moving average because the raw ratio is noisy:
+    gradient vector of all trainable parameters. The auxiliary gradient is
+    measured on the weighted contribution that enters the total loss, matching
+    the reference implementation, so the update is
 
-        lambda_i <- (1 - alpha) * lambda_i + alpha * lambda_hat_i
+        lambda_i <- (1 - alpha) * lambda_i + alpha * R_i / lambda_i
 
-    ``max_weight`` clamps the adaptive weights to keep a collapsing auxiliary
-    gradient from driving the ratio to arbitrarily large values.
+    with R_i = max|grad L_res| / mean|grad L_i|. This converges to
+    lambda_i = sqrt(R_i) instead of chasing R_i without bound.
     """
-
-    requires_gradients = True
 
     def __init__(
         self,
@@ -33,32 +32,25 @@ class GradientAnnealingBalancer(BaseBalancer):
         reference: str = "res",
         initial_weight: float = 1.0,
         epsilon: float = 1e-8,
-        max_weight: float | None = 1000.0,
     ):
         super().__init__()
         if not 0.0 < alpha <= 1.0:
             raise ValueError("Gradient annealing alpha must be in (0, 1].")
         if initial_weight <= 0.0:
             raise ValueError("Gradient annealing initial_weight must be positive.")
-        if max_weight is not None and max_weight <= 0.0:
-            raise ValueError("Gradient annealing max_weight must be positive.")
 
         self.alpha = alpha
         self.reference = reference
         self.initial_weight = initial_weight
         self.epsilon = epsilon
-        self.max_weight = max_weight
         self._names = set()
 
     def _ensure_components(self, names):
         names = set(names)
         if names != self._names:
             self._names = names
-            initial_weight = self.initial_weight
-            if self.max_weight is not None:
-                initial_weight = min(initial_weight, self.max_weight)
             self.weights = {
-                name: 1.0 if name == self.reference else initial_weight
+                name: 1.0 if name == self.reference else self.initial_weight
                 for name in names
             }
 
@@ -86,10 +78,12 @@ class GradientAnnealingBalancer(BaseBalancer):
             if name == self.reference:
                 self.weights[name] = 1.0
                 continue
-            target = reference / max(float(gradients.mean_abs[name]), self.epsilon)
-            if self.max_weight is not None:
-                target = min(target, self.max_weight)
-            weight = (1.0 - self.alpha) * self.weights[name] + self.alpha * target
-            if self.max_weight is not None:
-                weight = min(weight, self.max_weight)
-            self.weights[name] = weight
+            # The statistics are measured on the raw component loss, so scale
+            # by the current weight to obtain grad(lambda_i * L_i).
+            weighted_mean_abs = (
+                float(gradients.mean_abs[name]) * self.weights[name]
+            )
+            target = reference / max(weighted_mean_abs, self.epsilon)
+            self.weights[name] = (
+                (1.0 - self.alpha) * self.weights[name] + self.alpha * target
+            )
